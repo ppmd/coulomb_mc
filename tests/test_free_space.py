@@ -81,7 +81,6 @@ def test_free_space_2():
     N = 100
     e = 10.
     R = max(4, int(math.log(4*N, 8)))
-    R = 4
     L = 12
 
 
