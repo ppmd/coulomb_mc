@@ -290,9 +290,100 @@ class MCFMM:
         return  new_energy - old_energy - self_energy
 
 
-    def accept(self, move):
-        pass
+    def accept(self, move, energy_diff=None):
+        px = int(move[0])
+        new_pos = move[1]
 
+
+        if energy_diff is None:
+            energy_diff = self.propose(move)
+        
+        self.energy += energy_diff
+
+
+        old_pos = self.positions[px, :].copy()
+        charge = float(self.charges[px, 0])
+        
+        g = self.positions.group
+        old_cell = g.mc_fmm_cells[px, :].copy()
+        new_cell = self._get_cell(new_pos)
+        
+        # correct the cell to particle maps
+        self.direct_map[(old_cell[0], old_cell[1], old_cell[2])].remove(px)
+        assert px not in self.direct_map[(old_cell[0], old_cell[1], old_cell[2])]
+
+        tnew = (new_cell[0], new_cell[1], new_cell[2])
+        if tnew in self.direct_map.keys():
+            self.direct_map[tnew].append(px)
+        else:
+            self.direct_map[tnew] = [px]
+        
+        
+        # remove old contrib
+        for level in range(self.R):
+            
+            # cell on level 
+            cell_level = self._get_parent(old_cell, level)
+            child_index = self._get_child_index(cell_level)
+
+            il = self.il[0][child_index]
+
+            for ox in il:
+                ccc = (
+                    cell_level[0] + ox[0], 
+                    cell_level[1] + ox[1], 
+                    cell_level[2] + ox[2], 
+                )
+
+                # test if outside domain
+                sl = 2**level
+                if ccc[0] < 0: continue
+                if ccc[1] < 0: continue
+                if ccc[2] < 0: continue
+                if ccc[0] >= sl: continue
+                if ccc[1] >= sl: continue
+                if ccc[2] >= sl: continue
+
+                sph = self._get_cell_disp(ccc, old_pos, level)
+                self.lee.local_exp(sph, -charge, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
+
+
+        # add new contrib
+        for level in range(self.R):
+            
+            # cell on level 
+            cell_level = self._get_parent(new_cell, level)
+            child_index = self._get_child_index(cell_level)
+
+            il = self.il[0][child_index]
+
+            for ox in il:
+                ccc = (
+                    cell_level[0] + ox[0], 
+                    cell_level[1] + ox[1], 
+                    cell_level[2] + ox[2], 
+                )
+
+                # test if outside domain
+                sl = 2**level
+                if ccc[0] < 0: continue
+                if ccc[1] < 0: continue
+                if ccc[2] < 0: continue
+                if ccc[0] >= sl: continue
+                if ccc[1] >= sl: continue
+                if ccc[2] >= sl: continue
+
+                sph = self._get_cell_disp(ccc, new_pos, level)
+                self.lee.local_exp(sph, charge, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
+        
+
+        with g.mc_fmm_cells.modify_view() as m:
+            m[px, :] = new_cell
+
+        
+        # move the particle in the dats
+        with self.positions.modify_view() as m:
+            m[px, :] = new_pos.copy()
 
 
 

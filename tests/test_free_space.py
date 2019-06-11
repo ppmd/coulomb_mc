@@ -68,7 +68,6 @@ def get_new_energy(N, lid, pi, qi, pos):
     e = 0.0
     q = float(qi[lid, 0])
     for px in range(0, N):
-        if px == lid: continue
         e += qi[px, 0] / np.linalg.norm(pos - pi[px, :])
     return e * q
 
@@ -154,8 +153,85 @@ def test_free_space_2():
         assert err < 10.**-5
 
 
+
+def test_free_space_3():
+
+    N = 100
+    e = 10.
+    R = max(4, int(math.log(4*N, 8)))
+    R = 5
+    L = 16
+
+
+    rng = np.random.RandomState(34118)
+
+    A = state.State()
+    A.domain = domain.BaseDomainHalo(extent=(e, e, e))
+    A.domain.boundary_condition = domain.BoundaryTypePeriodic()
+
+
+    A.P = data.PositionDat()
+    A.Q = data.ParticleDat(ncomp=1)
+    A.G = data.ParticleDat(ncomp=1, dtype=INT64)
+
+    
+    pi = np.array(rng.uniform(low=-0.5*e, high=0.5*e, size=(N, 3)), REAL)
+    qi = np.array(rng.uniform(low=-1, high=1, size=(N, 1)), REAL)
+    gi = np.arange(N).reshape((N, 1))
+
+    with A.modify() as m:
+        m.add({
+            A.P: pi,
+            A.Q: qi,
+            A.G: gi
+        })
+
+
+    MC = mc_fmm.MCFMM(A.P, A.Q, A.domain, 'free_space', R, L)
+    
+    MC.initialise()
+
+    DFS = kmc_direct.FreeSpaceDirect()
+
+    correct = DFS(N, A.P.view, A.Q.view)
+
+    err = abs(MC.energy - correct) / abs(correct)
+    assert err < 10.**-5
+
+
+    
+    for testx in range(100):
+
+
+        gid = rng.randint(0, N)
+        lid = np.where(A.G.view[:, 0] == gid)[0]
+
+
+        pos = rng.uniform(-0.5*e, 0.5*e, (3,))
+
+        ed = MC.propose((lid, pos.copy()))
+        e0 = ed + MC.energy
+
+        old_pos = pi[gid, :].copy()
+
+
+        #print("\t==>", get_old_energy(N, lid, pi, qi), get_new_energy(N, lid, pi, qi, pos), get_self_energy(qi[gid, 0], old_pos, pos))
+
+
+        pi[gid, :] = pos.copy()
+        correct = DFS(N, pi, qi)
+
+        
+        err = abs(correct - e0) / abs(correct)
+        #print(err, correct, e0)
+
+
+
+        assert err < 10.**-5
         
 
+        # accept the move
+        MC.accept((lid, pos.copy()), ed)
 
 
 
