@@ -143,11 +143,9 @@ class MCFMM:
         g = self.positions.group
         C = g.mc_fmm_cells
 
-        tmp = np.zeros(self.ncomp, REAL)
 
         energy = 0.0
-        
-
+ 
         # indirect part ( and bin into cells)
         for px in range(N):
             pos = self.positions[px,:].copy()
@@ -156,61 +154,144 @@ class MCFMM:
             # cell on finest level
             cell = tuple(C[px, :])
 
-            for level in range(self.R):
-                
-                cell_level = self._get_parent(cell, level)
-                sph = self._get_cell_disp(cell_level, pos, level)
-                tmp[:] = 0.0
-                self.lee.dot_vec(sph, charge, tmp)
-
-                energy += np.dot(tmp.ravel(), self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :])
-
-
             if cell in self.direct_map.keys():
                 self.direct_map[cell].append(px)
             else:
                 self.direct_map[cell] = [px]
 
 
-        sl = 2**(self.R - 1)
+        # indirect part 
         for px in range(N):
-            pos = self.positions[px,:].copy()
-            charge = float(self.charges[px, 0])
+            energy += self._get_old_energy(px)
 
-            # cell on finest level
-            cell = C[px, :]            
-            for ox in self.il[1]:
-
-                ccc = (
-                    cell[0] + ox[0],
-                    cell[1] + ox[1],
-                    cell[2] + ox[2],
-                )
-                if ccc[0] < 0: continue
-                if ccc[1] < 0: continue
-                if ccc[2] < 0: continue
-                if ccc[0] >= sl: continue
-                if ccc[1] >= sl: continue
-                if ccc[2] >= sl: continue
-
-                ccc = tuple(ccc)
-                if ccc not in self.direct_map: continue
-
-                for jx in self.direct_map[ccc]:
-                    if jx == px: continue
-
-                    energy += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
 
         return 0.5 * energy
+    
 
+    def _get_old_energy(self, px):
+
+        tmp = np.zeros(self.ncomp, REAL)
+        N = self.positions.npart_local
+        g = self.positions.group
+        C = g.mc_fmm_cells
+        
+        sl = 2**(self.R - 1)
+        energy = 0.0
+
+        pos = self.positions[px,:].copy()
+
+        charge = float(self.charges[px, 0])
+
+        # cell on finest level
+        cell = (C[px, 0], C[px, 1], C[px, 2])
+
+        for level in range(self.R):
+            
+            cell_level = self._get_parent(cell, level)
+            sph = self._get_cell_disp(cell_level, pos, level)
+            tmp[:] = 0.0
+            self.lee.dot_vec(sph, charge, tmp)
+
+            energy += np.dot(tmp.ravel(), self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :])
+
+        for ox in self.il[1]:
+
+            ccc = (
+                cell[0] + ox[0],
+                cell[1] + ox[1],
+                cell[2] + ox[2],
+            )
+            if ccc[0] < 0: continue
+            if ccc[1] < 0: continue
+            if ccc[2] < 0: continue
+            if ccc[0] >= sl: continue
+            if ccc[1] >= sl: continue
+            if ccc[2] >= sl: continue
+
+            ccc = tuple(ccc)
+            if ccc not in self.direct_map: continue
+
+            for jx in self.direct_map[ccc]:
+                if jx == px: continue
+
+                energy += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
+
+        return energy
+
+
+    def _get_new_energy(self, px, pos):
+
+        tmp = np.zeros(self.ncomp, REAL)
+        N = self.positions.npart_local
+        g = self.positions.group
+        
+        sl = 2**(self.R - 1)
+        energy = 0.0
+
+        charge = float(self.charges[px, 0])
+
+        # cell on finest level
+        cell = self._get_cell(pos)
+
+        for level in range(self.R):
+            
+            cell_level = self._get_parent(cell, level)
+            sph = self._get_cell_disp(cell_level, pos, level)
+            tmp[:] = 0.0
+            self.lee.dot_vec(sph, charge, tmp)
+
+            energy += np.dot(tmp.ravel(), self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :])
+
+        for ox in self.il[1]:
+
+            ccc = (
+                cell[0] + ox[0],
+                cell[1] + ox[1],
+                cell[2] + ox[2],
+            )
+            if ccc[0] < 0: continue
+            if ccc[1] < 0: continue
+            if ccc[2] < 0: continue
+            if ccc[0] >= sl: continue
+            if ccc[1] >= sl: continue
+            if ccc[2] >= sl: continue
+
+            ccc = tuple(ccc)
+            if ccc not in self.direct_map: continue
+
+            for jx in self.direct_map[ccc]:
+                energy += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
+
+        return energy
+    
+
+    def _get_self_interaction(self, px, pos):
+
+        charge = self.charges[px, 0]
+        old_pos = self.positions[px, :]
+
+        return charge * charge / np.linalg.norm(old_pos.ravel() - pos.ravel())
 
 
     def initialise(self):
         self._setup_tree()
         self.energy = self._compute_energy()
 
+    
+    def propose(self, move):
+        px = int(move[0])
+        pos = move[1]
+        
+        old_energy = self._get_old_energy(px)
+        new_energy = self._get_new_energy(px, pos)
+        self_energy = self._get_self_interaction(px, pos)
+        #print("\t-->", old_energy, new_energy, self_energy)
+
+        return  new_energy - old_energy - self_energy
 
 
+    def accept(self, move):
+        pass
 
 
 
