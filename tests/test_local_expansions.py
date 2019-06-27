@@ -138,15 +138,15 @@ def test_local_expansion_creation_evaluation():
 
 
 
-    #for cx in range(N):
+    for cx in range(N):
 
-    #    tmp = np.zeros(ncomp, REAL)
-    #    sph = (radius[cx], theta[cx], phi[cx])
-    #    phi_local(L, tmp, sph)
-    #    
-    #    tmp *= charges[cx]
-    #    err = np.linalg.norm(tmp.ravel() - to_test[cx, :].ravel(), np.inf)
-    #    assert err < 10.**-13
+        tmp = np.zeros(ncomp, REAL)
+        sph = (radius[cx], theta[cx], phi[cx])
+        phi_local(L, tmp, sph)
+        
+        tmp *= charges[cx]
+        err = np.linalg.norm(tmp.ravel() - to_test[cx, :].ravel(), np.inf)
+        assert err < 10.**-13
 
 
 
