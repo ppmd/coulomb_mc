@@ -99,7 +99,7 @@ def test_local_expansion_creation():
 
     L = 20
     ncomp = 2 * (L**2)
-    N = 10
+    N = 50
 
 
     def re_lm(l,m): return (l**2) + l + m
@@ -135,10 +135,6 @@ def test_local_expansion_creation():
     )
 
     tmp = np.zeros(ncomp, REAL)
-
-    from coulomb_kmc import kmc_expansion_tools
-    
-    lee2 = kmc_expansion_tools.LocalExpEval(L)
 
 
 
