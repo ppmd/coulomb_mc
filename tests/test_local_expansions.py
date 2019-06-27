@@ -95,11 +95,12 @@ def phi_local(llimit, moments, disp_sph):
 
 
 
-def test_local_expansion_creation():
+def test_local_expansion_creation_evaluation():
 
     L = 20
     ncomp = 2 * (L**2)
     N = 50
+    N2 = 10
 
 
     def re_lm(l,m): return (l**2) + l + m
@@ -115,11 +116,12 @@ def test_local_expansion_creation():
     to_test = np.zeros((N, ncomp), REAL)
     ptr = np.zeros(N, ctypes.c_void_p)
     
+    rng = np.random.RandomState(seed=892124357)
     
-    charges[:] = np.random.uniform(size=N)
-    radius[:] = np.random.uniform(1, 2, size=N)
-    phi[:] = np.random.uniform(0, 2*math.pi, size=N)
-    theta[:] = np.random.uniform(0, math.pi, N)
+    charges[:] = rng.uniform(size=N)
+    radius[:] = rng.uniform(1, 2, size=N)
+    phi[:] = rng.uniform(0, 2*math.pi, size=N)
+    theta[:] = rng.uniform(0, math.pi, N)
 
 
     for cx in range(N):
@@ -134,18 +136,40 @@ def test_local_expansion_creation():
         ptr
     )
 
-    tmp = np.zeros(ncomp, REAL)
+
+
+    #for cx in range(N):
+
+    #    tmp = np.zeros(ncomp, REAL)
+    #    sph = (radius[cx], theta[cx], phi[cx])
+    #    phi_local(L, tmp, sph)
+    #    
+    #    tmp *= charges[cx]
+    #    err = np.linalg.norm(tmp.ravel() - to_test[cx, :].ravel(), np.inf)
+    #    assert err < 10.**-13
 
 
 
+    # random evals
+
+    assert N2 < N
     for cx in range(N):
+        pr = np.array(rng.uniform(0.1, 2, N2), REAL)
+        pt = np.array(rng.uniform(0, math.pi, N2), REAL)
+        pp = np.array(rng.uniform(0, 2*math.pi, N2), REAL)
+        pv = np.zeros(N2, REAL)
+
+        vptr = np.zeros(N2, ctypes.c_void_p)
+
+        for dx in range(N2):
+            vptr[dx] = to_test[dx, :].ctypes.get_as_parameter().value
+
+        lee.compute_phi_local(N2, pr, pt, pp, vptr, pv)
         
-        sph = (radius[cx], theta[cx], phi[cx])
-        phi_local(L, tmp, sph)
-        
-        tmp *= charges[cx]
-        err = np.linalg.norm(tmp.ravel() - to_test[cx, :].ravel(), np.inf)
-        assert err < 10.**-15
+        for dx in range(N2):
+            correct = compute_phi_local(L, to_test[dx, :], (pr[dx], pt[dx], pp[dx]))[0]
+            err = abs(correct - pv[dx]) / abs(correct)
+            assert err < 10.**-12
 
 
 

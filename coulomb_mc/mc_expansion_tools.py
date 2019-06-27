@@ -44,8 +44,8 @@ class LocalExp:
         assign_gen = ''
         for lx in range(self.L):
             for mx in range(-lx, lx+1):
-                reL = SphSymbol('moments[OFFSET + {ind}]'.format(ind=cube_ind(lx, mx)))
-                imL = SphSymbol('moments[OFFSET + IM_OFFSET + {ind}]'.format(ind=cube_ind(lx, mx)))
+                reL = SphSymbol('moments[{ind}]'.format(ind=cube_ind(lx, mx)))
+                imL = SphSymbol('moments[IM_OFFSET + {ind}]'.format(ind=cube_ind(lx, mx)))
                 reY, imY = sph_gen.get_y_sym(lx, mx)
                 phi_sym = cmplx_mul(reL, imL, reY, imY)[0]
                 assign_gen += 'tmp_energy += rhol * ({phi_sym});\n'.format(phi_sym=str(phi_sym))
@@ -67,9 +67,8 @@ class LocalExp:
         ){{
 
             
-            #pragma omp parallel for simd
+            #pragma omp parallel for
             for(INT64 ix=0 ; ix<n ; ix++){{
-                const INT64 OFFSET = ix * IM_OFFSET * 2;
                 const REAL radius = hradius[ix];
                 const REAL theta = htheta[ix];
                 const REAL phi = hphi[ix];
@@ -130,7 +129,7 @@ class LocalExp:
             REAL * RESTRICT * RESTRICT hout
         ){{
 
-            #pragma omp parallel for simd
+            #pragma omp parallel for
             for(INT64 ix=0 ; ix<n ; ix++){{
                 const INT64 OFFSET = ix * IM_OFFSET * 2;
                 const REAL charge = hcharge[ix];
@@ -168,10 +167,10 @@ class LocalExp:
 
         self._local_eval_lib(
             INT64(n),
-            radius.get_as_parameter(),
-            theta.get_as_parameter(),
-            phi.get_as_parameter(),
-            moments.get_as_parameter(),
+            radius.ctypes.get_as_parameter(),
+            theta.ctypes.get_as_parameter(),
+            phi.ctypes.get_as_parameter(),
+            moments.ctypes.get_as_parameter(),
             out.ctypes.get_as_parameter()
         )
 
