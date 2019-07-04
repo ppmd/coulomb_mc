@@ -116,6 +116,8 @@ class MCFMM:
             const INT64 * RESTRICT OCC,         //cell occupancies
             const INT64 * RESTRICT MAP,         //map from cells to particle ids (local ids)
             const INT64 * RESTRICT NNMAP,       //nearest neighbour offsets
+            const REAL * RESTRICT NEW_POS,      //new position if MODE == 1
+            const INT64 * RESTRICT NEW_CELL,    //new cells if MODE == 1
             REAL * RESTRICT U                   //output energy array
         ){{
             
@@ -134,19 +136,43 @@ class MCFMM:
 
                 const INT64 ix = ix1;
                 REAL UTMP = 0.0;
+ 
+                REAL rpx = P[ix * 3 + 0];
+                REAL rpy = P[ix * 3 + 1];
+                REAL rpz = P[ix * 3 + 2];
 
-                const REAL rx = P[ix * 3 + 0];
-                const REAL ry = P[ix * 3 + 1];
-                const REAL rz = P[ix * 3 + 2];
+                if (MODE == 1){{
+                    rpx = NEW_POS[px * 3 + 0];
+                    rpy = NEW_POS[px * 3 + 1];
+                    rpz = NEW_POS[px * 3 + 2];
+                }}
+
+
+                const REAL rx = rpx;
+                const REAL ry = rpy;
+                const REAL rz = rpz;
+
+                INT64 CIX = CELLS[ix * 3 + 0];
+                INT64 CIY = CELLS[ix * 3 + 1];
+                INT64 CIZ = CELLS[ix * 3 + 2];
+
+                if (MODE == 1){{
+                    CIX = NEW_CELL[px * 3 + 0];
+                    CIY = NEW_CELL[px * 3 + 1];
+                    CIZ = NEW_CELL[px * 3 + 2];
+                }}
+
+
+
                 const REAL qi = Q[ix];
                 const INT64 idi = IDS[ix];
                 
                 //for each offset
                 for(INT64 ox=0 ; ox<noffsets ; ox++){{
                     
-                    const INT64 ocx = CELLS[ix * 3 + 0] + NNMAP[ox * 3 + 0];
-                    const INT64 ocy = CELLS[ix * 3 + 1] + NNMAP[ox * 3 + 1];
-                    const INT64 ocz = CELLS[ix * 3 + 2] + NNMAP[ox * 3 + 2];
+                    const INT64 ocx = CIX + NNMAP[ox * 3 + 0];
+                    const INT64 ocy = CIY + NNMAP[ox * 3 + 1];
+                    const INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
 
                     if (ocx < 0) {{continue;}}
                     if (ocy < 0) {{continue;}}
@@ -621,26 +647,6 @@ class MCFMM:
             mv[:, 0] = np.arange(N)
 
 
-        #energy_pc = REAL()
-        #self._direct_contrib_lib(
-        #    INT64(-1),                         #// -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
-        #    INT64(N),                          #//number of contributions to compute
-        #    INT64(self.il_earray.shape[0]),
-        #    INT64(self.cell_indices.shape[3]),
-        #    g._mc_fmm_cells.view.ctypes.get_as_parameter(), # passed as a dummy pointer
-        #    g._mc_ids.view.ctypes.get_as_parameter(),
-        #    self.positions.view.ctypes.get_as_parameter(),
-        #    self.charges.view.ctypes.get_as_parameter(),
-        #    g._mc_fmm_cells.view.ctypes.get_as_parameter(),
-        #    self.cell_occupation.ctypes.get_as_parameter(),
-        #    self.cell_indices.ctypes.get_as_parameter(),
-        #    self.il_earray.ctypes.get_as_parameter(),
-        #    ctypes.byref(energy_pc)
-        #)
-        #energy_c = energy_pc.value
-        #energy += energy_c
-
-
         # indirect part 
         energy_py = 0.0
         for px in range(N):
@@ -695,6 +701,8 @@ class MCFMM:
             self.cell_occupation.ctypes.get_as_parameter(),
             self.cell_indices.ctypes.get_as_parameter(),
             self.il_earray.ctypes.get_as_parameter(),
+            ctypes.byref(REAL()),
+            ctypes.byref(INT64()),
             ctypes.byref(energy_pc)
         )
         energy_c = energy_pc.value
@@ -750,25 +758,55 @@ class MCFMM:
 
             energy += np.dot(tmp.ravel(), self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :])
 
-        for ox in self.il[1]:
 
-            ccc = (
-                cell[0] + ox[0],
-                cell[1] + ox[1],
-                cell[2] + ox[2],
-            )
-            if ccc[0] < 0: continue
-            if ccc[1] < 0: continue
-            if ccc[2] < 0: continue
-            if ccc[0] >= sl: continue
-            if ccc[1] >= sl: continue
-            if ccc[2] >= sl: continue
+        energy_pc = REAL(0)
+        index_c = INT64(px)
+        tpos = np.array((pos[0], pos[1], pos[2]), REAL)
+        tcell = np.array(cell, INT64)
+        self._direct_contrib_lib(
+            INT64(1),                         #// -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
+            INT64(1),                          #//number of contributions to compute
+            INT64(self.il_earray.shape[0]),
+            INT64(self.cell_indices.shape[3]),
+            ctypes.byref(index_c),
+            g._mc_ids.view.ctypes.get_as_parameter(),
+            self.positions.view.ctypes.get_as_parameter(),
+            self.charges.view.ctypes.get_as_parameter(),
+            g._mc_fmm_cells.view.ctypes.get_as_parameter(),
+            self.cell_occupation.ctypes.get_as_parameter(),
+            self.cell_indices.ctypes.get_as_parameter(),
+            self.il_earray.ctypes.get_as_parameter(),
+            tpos.ctypes.get_as_parameter(),
+            tcell.ctypes.get_as_parameter(),
+            ctypes.byref(energy_pc)
+        )
+        energy_c = energy_pc.value
+        energy += energy_c
 
-            ccc = tuple(ccc)
-            if ccc not in self.direct_map: continue
 
-            for jx in self.direct_map[ccc]:
-                energy += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
+        #energy_py = 0.0
+        #for ox in self.il[1]:
+        #    ccc = (
+        #        cell[0] + ox[0],
+        #        cell[1] + ox[1],
+        #        cell[2] + ox[2],
+        #    )
+        #    if ccc[0] < 0: continue
+        #    if ccc[1] < 0: continue
+        #    if ccc[2] < 0: continue
+        #    if ccc[0] >= sl: continue
+        #    if ccc[1] >= sl: continue
+        #    if ccc[2] >= sl: continue
+
+        #    ccc = tuple(ccc)
+        #    if ccc not in self.direct_map: continue
+
+        #    for jx in self.direct_map[ccc]:
+        #        energy_py += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
+
+
+        #energy += energy_py
+
 
         return energy
     
