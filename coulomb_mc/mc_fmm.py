@@ -20,6 +20,7 @@ class MCFMM:
         self.positions = positions
         self.charges = charges
         self.domain = domain
+        self.comm = self.domain.comm
         self.boundary_condition = boundary_condition
         self.R = r
         self.L = l
@@ -83,6 +84,7 @@ class MCFMM:
         s = [sx ** (self.R - 1) for sx in s]
         ncells_finest = s[0] * s[1] * s[2]
         self.cell_occupation_ga = data.GlobalArray(ncomp=ncells_finest, dtype=INT64)
+        self.cell_occupation = None
         self.cell_indices = np.zeros((s[2], s[1], s[0], 10), INT64)
         self.max_occupancy = None
 
@@ -460,6 +462,9 @@ class MCFMM:
 
 
     def _setup_tree(self):
+        
+        for levelx in range(self.R):
+            self.tree_local[levelx][:] = 0
 
         g = self.positions.group
         N = self.positions.npart_local
@@ -470,6 +475,9 @@ class MCFMM:
 
         self._cell_bin_loop.execute()
         self.max_occupancy = np.max(self.cell_occupation_ga[:])
+        s = self.subdivision
+        s = [sx ** (self.R - 1) for sx in s]
+        self.cell_occupation = self.cell_occupation_ga[:].copy().reshape((s[2], s[1], s[0]))
 
         mc_nexp = g._mc_nexp.view
         mc_charge = g._mc_charge.view
@@ -593,11 +601,10 @@ class MCFMM:
         C = g._mc_fmm_cells
 
         energy = 0.0
- 
+        
+        self.direct_map = {}
         # indirect part ( and bin into cells)
         for px in range(N):
-            pos = self.positions[px,:].copy()
-            charge = float(self.charges[px, 0])
 
             # cell on finest level
             cell = tuple(C[px, :])
@@ -607,13 +614,8 @@ class MCFMM:
             else:
                 self.direct_map[cell] = [px]
 
+        self._make_occupancy_map()
 
-        if self.cell_indices.shape[3] < self.max_occupancy:
-            self.cell_indices = np.zeros((s[2], s[1], s[0], self.max_occupancy), INT64)
-
-        for cellx in self.direct_map.keys():
-            l = len(self.direct_map[cellx])
-            self.cell_indices[cellx[2], cellx[1], cellx[0], :l] = self.direct_map[cellx]
         
         with g._mc_ids.modify_view() as mv:
             mv[:, 0] = np.arange(N)
@@ -630,7 +632,7 @@ class MCFMM:
         #    self.positions.view.ctypes.get_as_parameter(),
         #    self.charges.view.ctypes.get_as_parameter(),
         #    g._mc_fmm_cells.view.ctypes.get_as_parameter(),
-        #    self.cell_occupation_ga.ctypes_data_read,
+        #    self.cell_occupation.ctypes.get_as_parameter(),
         #    self.cell_indices.ctypes.get_as_parameter(),
         #    self.il_earray.ctypes.get_as_parameter(),
         #    ctypes.byref(energy_pc)
@@ -690,7 +692,7 @@ class MCFMM:
             self.positions.view.ctypes.get_as_parameter(),
             self.charges.view.ctypes.get_as_parameter(),
             g._mc_fmm_cells.view.ctypes.get_as_parameter(),
-            self.cell_occupation_ga.ctypes_data_read,
+            self.cell_occupation.ctypes.get_as_parameter(),
             self.cell_indices.ctypes.get_as_parameter(),
             self.il_earray.ctypes.get_as_parameter(),
             ctypes.byref(energy_pc)
@@ -720,7 +722,7 @@ class MCFMM:
         #        if jx == px: continue
 
         #        energy_py += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
-
+        #energy += energy_py
 
         return energy
 
@@ -796,6 +798,20 @@ class MCFMM:
         return  new_energy - old_energy - self_energy
 
 
+    def _make_occupancy_map(self):
+        s = self.subdivision
+        s = [sx ** (self.R - 1) for sx in s]
+        if self.cell_indices.shape[3] < self.max_occupancy:
+            self.cell_indices = np.zeros((s[2], s[1], s[0], self.max_occupancy), INT64)
+        
+        for cellx in self.direct_map.keys():
+            l = len(self.direct_map[cellx])
+            self.cell_indices[cellx[2], cellx[1], cellx[0], :l] = self.direct_map[cellx]
+
+
+
+
+
     def accept(self, move, energy_diff=None):
         px = int(move[0])
         new_pos = move[1]
@@ -819,11 +835,33 @@ class MCFMM:
         assert px not in self.direct_map[(old_cell[0], old_cell[1], old_cell[2])]
 
         tnew = (new_cell[0], new_cell[1], new_cell[2])
+        told = (old_cell[0], old_cell[1], old_cell[2])
+
         if tnew in self.direct_map.keys():
             self.direct_map[tnew].append(px)
         else:
             self.direct_map[tnew] = [px]
-     
+        
+        possible_new_max = len(self.direct_map[tnew])
+        ol = len(self.direct_map[told])
+
+
+        if possible_new_max > self.max_occupancy:
+            # need to remake the map
+            self.max_occupancy = possible_new_max
+            self._make_occupancy_map()
+        else:
+            # add the new one
+            self.cell_indices[tnew[2], tnew[1], tnew[0], :possible_new_max] = self.direct_map[tnew]
+            # remove the old one
+            self.cell_indices[told[2], told[1], told[0], :ol] = self.direct_map[told]
+
+
+        self.cell_occupation[tnew[2], tnew[1], tnew[0]] = possible_new_max
+        self.cell_occupation[told[2], told[1], told[0]] = ol
+
+
+
 
         # to pass into lib
         charge = np.zeros(self.il_max_len * self.R, REAL)
@@ -911,6 +949,7 @@ class MCFMM:
 
 
 
+        assert self.comm.size == 1
         with g._mc_fmm_cells.modify_view() as m:
             m[px, :] = new_cell
 
@@ -919,15 +958,7 @@ class MCFMM:
         with self.positions.modify_view() as m:
             m[px, :] = new_pos.copy()
 
-
-
-
-
-
-
-
-
-
+ 
 
 
 
