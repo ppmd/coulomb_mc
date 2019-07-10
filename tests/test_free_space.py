@@ -200,7 +200,7 @@ def test_free_space_3():
 
 
     
-    for testx in range(1):
+    for testx in range(100):
 
 
         gid = rng.randint(0, N)
