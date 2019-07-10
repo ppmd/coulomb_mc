@@ -31,6 +31,9 @@ class MCFMM:
         # tree
         self.tree = octal.OctalTree(self.R, domain.comm)
         self.tree_local = octal.OctalDataTree(self.tree, self.ncomp, 'plain', REAL)
+        self.tree_local_ptrs = np.zeros(self.R, ctypes.c_void_p)
+        for rx in range(self.R):
+            self.tree_local_ptrs[rx] = self.tree_local[rx].ctypes.get_as_parameter().value
         
         # interaction lists
         self.il = fmm_interaction_lists.compute_interaction_lists(domain.extent, self.subdivision)
@@ -41,7 +44,6 @@ class MCFMM:
         self.il_scalararray[:] = self.il_array.ravel().copy()
 
         self.il_earray = np.array(self.il[1], INT64)
-
         
         # expansion tools
         self.lee = kmc_expansion_tools.LocalExpEval(self.L)
@@ -98,6 +100,210 @@ class MCFMM:
 
         self._direct_contrib_lib = None
         self._init_direct_contrib_lib()
+        self._init_indirect_accept_lib()
+    
+    def free(self):
+        self.tree.free()
+        del self.tree_local
+
+    def _init_indirect_accept_lib(self):
+
+        source = r'''
+
+        {INLINE_LOCAL_EXP}
+
+        extern "C" int indirect_accept(
+            const REAL  * RESTRICT old_position,
+            const REAL  * RESTRICT new_position,
+            const REAL             charge,
+            const INT64 * RESTRICT offsets,
+            REAL * RESTRICT * RESTRICT moments
+        ){{
+            
+
+
+            #pragma omp parallel for collapse(2)
+            for( int rx=0 ; rx<R ; rx++){{
+                for( int ox=0 ; ox<NUM_OFFSETS ; ox++){{
+                    
+
+                    const REAL ospx = old_position[0] + HEX;
+                    const REAL ospy = old_position[1] + HEY;
+                    const REAL ospz = old_position[2] + HEZ;
+                    
+                    // get the cell
+                    const int ocx = ospx * CELL_BIN_X[rx];
+                    const int ocy = ospy * CELL_BIN_Y[rx];
+                    const int ocz = ospz * CELL_BIN_Z[rx];
+                    
+                    // compute the child index
+                    const int ccx = ocx % SUB_X;
+                    const int ccy = ocy % SUB_Y;
+                    const int ccz = ocz % SUB_Z;
+                    const int child_index = ccx + SUB_X * (ccy + SUB_Y * ccz);
+                    
+                    const int oscx = ocx + offsets[child_index * 3 * NUM_OFFSETS + ox * 3 + 0];
+                    const int oscy = ocy + offsets[child_index * 3 * NUM_OFFSETS + ox * 3 + 1];
+                    const int oscz = ocz + offsets[child_index * 3 * NUM_OFFSETS + ox * 3 + 2];
+                    
+                    // free space checking
+
+                    if (
+                        (oscx < 0)  ||
+                        (oscy < 0)  ||
+                        (oscz < 0)  ||
+                        (oscx >= NUM_CELLS_X[rx]) ||
+                        (oscy >= NUM_CELLS_Y[rx]) ||
+                        (oscz >= NUM_CELLS_Z[rx])
+                    ) {{
+                        continue;
+                    }}
+                    
+
+                    const REAL oocx = -HEX + (0.5 + oscx) * CELL_WIDTH_X[rx];
+                    const REAL oocy = -HEY + (0.5 + oscy) * CELL_WIDTH_Y[rx];
+                    const REAL oocz = -HEZ + (0.5 + oscz) * CELL_WIDTH_Z[rx];
+
+                    REAL dx = old_position[0] - oocx;
+                    REAL dy = old_position[1] - oocy;
+                    REAL dz = old_position[2] - oocz;
+                    REAL dx2 = dx*dx;
+                    REAL dx2_p_dy2 = dx2 + dy*dy;
+                    REAL d2 = dx2_p_dy2 + dz*dz;
+                    REAL radius = sqrt(d2);
+                    REAL theta = atan2(sqrt(dx2_p_dy2), dz);
+                    REAL phi = atan2(dy, dx);
+
+                    inline_local_exp(-1.0 * charge, radius, theta, phi, &moments[rx][NCOMP * ( oscx + NUM_CELLS_X[rx] * (oscy + NUM_CELLS_Y[rx] * oscz))]);
+
+                }}
+            }}
+
+
+            #pragma omp parallel for collapse(2)
+            for( int rx=0 ; rx<R ; rx++){{
+                for( int ox=0 ; ox<NUM_OFFSETS ; ox++){{
+                    
+
+                    const REAL ospx = new_position[0] + HEX;
+                    const REAL ospy = new_position[1] + HEY;
+                    const REAL ospz = new_position[2] + HEZ;
+                    
+                    const int ocx = ospx * CELL_BIN_X[rx];
+                    const int ocy = ospy * CELL_BIN_Y[rx];
+                    const int ocz = ospz * CELL_BIN_Z[rx];
+                    
+                    // compute the child index
+                    const int ccx = ocx % SUB_X;
+                    const int ccy = ocy % SUB_Y;
+                    const int ccz = ocz % SUB_Z;
+                    const int child_index = ccx + SUB_X * (ccy + SUB_Y * ccz);
+                    
+                    const int oscx = ocx + offsets[child_index * 3 * NUM_OFFSETS + ox * 3 + 0];
+                    const int oscy = ocy + offsets[child_index * 3 * NUM_OFFSETS + ox * 3 + 1];
+                    const int oscz = ocz + offsets[child_index * 3 * NUM_OFFSETS + ox * 3 + 2];
+                    
+                    // free space checking
+
+                    if (
+                        (oscx < 0)  ||
+                        (oscy < 0)  ||
+                        (oscz < 0)  ||
+                        (oscx >= NUM_CELLS_X[rx]) ||
+                        (oscy >= NUM_CELLS_Y[rx]) ||
+                        (oscz >= NUM_CELLS_Z[rx])
+                    ) {{
+                        continue;
+                    }}
+
+
+                    const REAL oocx = -HEX + (0.5 + oscx) * CELL_WIDTH_X[rx];
+                    const REAL oocy = -HEY + (0.5 + oscy) * CELL_WIDTH_Y[rx];
+                    const REAL oocz = -HEZ + (0.5 + oscz) * CELL_WIDTH_Z[rx];
+
+                    REAL dx = new_position[0] - oocx;
+                    REAL dy = new_position[1] - oocy;
+                    REAL dz = new_position[2] - oocz;
+                    REAL dx2 = dx*dx;
+                    REAL dx2_p_dy2 = dx2 + dy*dy;
+                    REAL d2 = dx2_p_dy2 + dz*dz;
+                    REAL radius = sqrt(d2);
+                    REAL theta = atan2(sqrt(dx2_p_dy2), dz);
+                    REAL phi = atan2(dy, dx);
+
+                    inline_local_exp(charge, radius, theta, phi, &moments[rx][NCOMP * ( oscx + NUM_CELLS_X[rx] * (oscy + NUM_CELLS_Y[rx] * oscz))]);
+
+                }}
+            }}
+
+
+
+
+
+
+            return 0;
+        }}
+
+        '''.format(
+            INLINE_LOCAL_EXP=self.mc_lee.create_local_exp_src
+        )
+        
+
+
+        e = self.domain.extent
+        s = self.subdivision
+        R = self.R
+
+        header = r'''
+        #include <math.h>
+        #include <stdio.h>
+        #define REAL double
+        #define INT64 int64_t
+        #define R {R}
+        #define NUM_OFFSETS {NUM_OFFSETS}
+        #define HEX {HEX}
+        #define HEY {HEY}
+        #define HEZ {HEZ}
+        #define NCOMP {NCOMP}
+        
+        #define SUB_X {SUB_X}
+        #define SUB_Y {SUB_Y}
+        #define SUB_Z {SUB_Z}
+
+        const REAL CELL_BIN_X[R] = {{ {CELL_BIN_X} }};
+        const REAL CELL_BIN_Y[R] = {{ {CELL_BIN_Y} }};
+        const REAL CELL_BIN_Z[R] = {{ {CELL_BIN_Z} }};
+        const REAL CELL_WIDTH_X[R] = {{ {CELL_WIDTH_X} }};
+        const REAL CELL_WIDTH_Y[R] = {{ {CELL_WIDTH_Y} }};
+        const REAL CELL_WIDTH_Z[R] = {{ {CELL_WIDTH_Z} }};        
+        const INT64 NUM_CELLS_X[R] = {{ {NUM_CELLS_X} }};
+        const INT64 NUM_CELLS_Y[R] = {{ {NUM_CELLS_Y} }};
+        const INT64 NUM_CELLS_Z[R] = {{ {NUM_CELLS_Z} }};
+
+        '''.format(
+            R=self.R,
+            NUM_OFFSETS=self.il_max_len,
+            HEX=e[0] * 0.5,
+            HEY=e[1] * 0.5,
+            HEZ=e[2] * 0.5,
+            SUB_X=s[0],
+            SUB_Y=s[1],
+            SUB_Z=s[2],
+            CELL_BIN_X=','.join([str((s[0] ** (rx)) / e[0]) for rx in range(R)]),
+            CELL_BIN_Y=','.join([str((s[1] ** (rx)) / e[1]) for rx in range(R)]),
+            CELL_BIN_Z=','.join([str((s[2] ** (rx)) / e[2]) for rx in range(R)]),            
+            CELL_WIDTH_X=','.join([str(e[0] / (s[0] ** (rx))) for rx in range(R)]),
+            CELL_WIDTH_Y=','.join([str(e[1] / (s[1] ** (rx))) for rx in range(R)]),
+            CELL_WIDTH_Z=','.join([str(e[2] / (s[2] ** (rx))) for rx in range(R)]),
+            NUM_CELLS_X=','.join([str(int(s[0] ** (rx))) for rx in range(R)]),
+            NUM_CELLS_Y=','.join([str(int(s[1] ** (rx))) for rx in range(R)]),
+            NUM_CELLS_Z=','.join([str(int(s[2] ** (rx))) for rx in range(R)]),
+            NCOMP=self.ncomp
+        )
+
+        self._indirect_accept_lib = lib.build.simple_lib_creator(header, source)['indirect_accept']
+
+
 
     def _init_direct_contrib_lib(self):
 
@@ -431,6 +637,10 @@ class MCFMM:
 
         self._cell_bin_format_lib = lib.build.simple_lib_creator(header, source)['bookkeeping_entry']
 
+    
+
+    
+
 
 
     
@@ -477,14 +687,17 @@ class MCFMM:
         """
         Return the index of the parent of a cell on a level
         """
-        return [
-            int(cx) // (2**(self.R - level - 1)) for cx in cell
-        ]
+        c = 2**(self.R - level - 1)
+        return (
+            int(cell[0]) // c,
+            int(cell[1]) // c,
+            int(cell[2]) // c
+        )
 
 
     def _get_child_index(self, cell):
-        t = [int(cx) % 2 for cx in cell]
-        return t[0] + 2 * (t[1] + 2 * t[2])
+
+        return (int(cell[0]) % 2) + 2 * ((int(cell[1]) % 2) + 2 * (int(cell[2]) % 2))
 
 
     def _setup_tree(self):
@@ -664,7 +877,8 @@ class MCFMM:
         N = self.positions.npart_local
         g = self.positions.group
         C = g._mc_fmm_cells
-        
+        R = self.R
+
         sl = 2**(self.R - 1)
         energy = 0.0
 
@@ -674,15 +888,27 @@ class MCFMM:
 
         # cell on finest level
         cell = (C[px, 0], C[px, 1], C[px, 2])
+        
+        radius = np.zeros(R, REAL)
+        theta = np.zeros(R, REAL)
+        phi = np.zeros(R, REAL)
+        moments = np.zeros(R, ctypes.c_void_p)
+        out = np.zeros(R, REAL)
+        
 
         for level in range(self.R):
             
             cell_level = self._get_parent(cell, level)
             sph = self._get_cell_disp(cell_level, pos, level)
-            tmp[:] = 0.0
-            self.lee.dot_vec(sph, charge, tmp)
 
-            energy += np.dot(tmp.ravel(), self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :])
+
+            radius[level] = sph[0]
+            theta[level] = sph[1]
+            phi[level] = sph[2]
+            moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
+        
+        self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
+        energy += np.sum(out) * charge
 
 
         energy_pc = REAL()
@@ -740,7 +966,7 @@ class MCFMM:
         tmp = np.zeros(self.ncomp, REAL)
         N = self.positions.npart_local
         g = self.positions.group
-        
+        R = self.R       
         sl = 2**(self.R - 1)
         energy = 0.0
 
@@ -749,14 +975,25 @@ class MCFMM:
         # cell on finest level
         cell = self._get_cell(pos)
 
+        radius = np.zeros(R, REAL)
+        theta = np.zeros(R, REAL)
+        phi = np.zeros(R, REAL)
+        moments = np.zeros(R, ctypes.c_void_p)
+        out = np.zeros(R, REAL)
+
         for level in range(self.R):
             
             cell_level = self._get_parent(cell, level)
             sph = self._get_cell_disp(cell_level, pos, level)
-            tmp[:] = 0.0
-            self.lee.dot_vec(sph, charge, tmp)
 
-            energy += np.dot(tmp.ravel(), self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :])
+            radius[level] = sph[0]
+            theta[level] = sph[1]
+            phi[level] = sph[2]
+            moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
+        
+        self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
+        energy += np.sum(out) * charge
+
 
 
         energy_pc = REAL(0)
@@ -897,92 +1134,102 @@ class MCFMM:
 
         self.cell_occupation[tnew[2], tnew[1], tnew[0]] = possible_new_max
         self.cell_occupation[told[2], told[1], told[0]] = ol
+        
+        new_position = np.array((new_pos[0], new_pos[1], new_pos[2]), REAL)
+        old_position = np.array((old_pos[0], old_pos[1], old_pos[2]), REAL)
 
 
+        self._indirect_accept_lib(
+            old_position.ctypes.get_as_parameter(),
+            new_position.ctypes.get_as_parameter(),
+            REAL(q),
+            self.il_array.ctypes.get_as_parameter(),
+            self.tree_local_ptrs.ctypes.get_as_parameter()
+        )
 
 
-        # to pass into lib
-        charge = np.zeros(self.il_max_len * self.R, REAL)
-        radius = np.zeros_like(charge)
-        theta = np.zeros_like(charge)
-        phi = np.zeros_like(charge)
-        ptrs = np.zeros(self.il_max_len * self.R, ctypes.c_void_p)
+        ### to pass into lib
+        #charge = np.zeros(self.il_max_len * self.R, REAL)
+        #radius = np.zeros_like(charge)
+        #theta = np.zeros_like(charge)
+        #phi = np.zeros_like(charge)
+        #ptrs = np.zeros(self.il_max_len * self.R, ctypes.c_void_p)
 
-        n = 0
-        # remove old contrib
-        for level in range(self.R):
-            
-            # cell on level 
-            cell_level = self._get_parent(old_cell, level)
-            child_index = self._get_child_index(cell_level)
+        #n = 0
+        ## remove old contrib
+        #for level in range(self.R):
+        #    
+        #    # cell on level 
+        #    cell_level = self._get_parent(old_cell, level)
+        #    child_index = self._get_child_index(cell_level)
 
-            il = self.il[0][child_index]
+        #    il = self.il[0][child_index]
 
-            for ox in il:
-                ccc = (
-                    cell_level[0] + ox[0], 
-                    cell_level[1] + ox[1], 
-                    cell_level[2] + ox[2], 
-                )
+        #    for ox in il:
+        #        ccc = (
+        #            cell_level[0] + ox[0], 
+        #            cell_level[1] + ox[1], 
+        #            cell_level[2] + ox[2], 
+        #        )
 
-                # test if outside domain
-                sl = 2**level
-                if ccc[0] < 0: continue
-                if ccc[1] < 0: continue
-                if ccc[2] < 0: continue
-                if ccc[0] >= sl: continue
-                if ccc[1] >= sl: continue
-                if ccc[2] >= sl: continue
+        #        # test if outside domain
+        #        sl = 2**level
+        #        if ccc[0] < 0: continue
+        #        if ccc[1] < 0: continue
+        #        if ccc[2] < 0: continue
+        #        if ccc[0] >= sl: continue
+        #        if ccc[1] >= sl: continue
+        #        if ccc[2] >= sl: continue
 
-                sph = self._get_cell_disp(ccc, old_pos, level)
-                #self.lee.local_exp(sph, -q, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
+        #        sph = self._get_cell_disp(ccc, old_pos, level)
+        #        #self.lee.local_exp(sph, -q, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
 
-                charge[n] = -q
-                radius[n] = sph[0]
-                theta[n] = sph[1]
-                phi[n] = sph[2]
-                ptrs[n] = self.tree_local[level][ccc[2], ccc[1], ccc[0], :].ctypes.get_as_parameter().value
-                n += 1
+        #        charge[n] = -q
+        #        radius[n] = sph[0]
+        #        theta[n] = sph[1]
+        #        phi[n] = sph[2]
+        #        ptrs[n] = self.tree_local[level][ccc[2], ccc[1], ccc[0], :].ctypes.get_as_parameter().value
+        #        n += 1
 
-        self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
+        #self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
 
-        n = 0
-        # add new contrib
-        for level in range(self.R):
-            
-            # cell on level 
-            cell_level = self._get_parent(new_cell, level)
-            child_index = self._get_child_index(cell_level)
+        #n = 0
+        ## add new contrib
+        #for level in range(self.R):
+        #    
+        #    # cell on level 
+        #    cell_level = self._get_parent(new_cell, level)
+        #    child_index = self._get_child_index(cell_level)
 
-            il = self.il[0][child_index]
+        #    il = self.il[0][child_index]
 
-            for ox in il:
-                ccc = (
-                    cell_level[0] + ox[0], 
-                    cell_level[1] + ox[1], 
-                    cell_level[2] + ox[2], 
-                )
+        #    for ox in il:
+        #        ccc = (
+        #            cell_level[0] + ox[0], 
+        #            cell_level[1] + ox[1], 
+        #            cell_level[2] + ox[2], 
+        #        )
 
-                # test if outside domain
-                sl = 2**level
-                if ccc[0] < 0: continue
-                if ccc[1] < 0: continue
-                if ccc[2] < 0: continue
-                if ccc[0] >= sl: continue
-                if ccc[1] >= sl: continue
-                if ccc[2] >= sl: continue
+        #        # test if outside domain
+        #        sl = 2**level
+        #        if ccc[0] < 0: continue
+        #        if ccc[1] < 0: continue
+        #        if ccc[2] < 0: continue
+        #        if ccc[0] >= sl: continue
+        #        if ccc[1] >= sl: continue
+        #        if ccc[2] >= sl: continue
 
-                sph = self._get_cell_disp(ccc, new_pos, level)
-                #self.lee.local_exp(sph, q, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
+        #        sph = self._get_cell_disp(ccc, new_pos, level)
+        #        #self.lee.local_exp(sph, q, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
 
-                charge[n] = q
-                radius[n] = sph[0]
-                theta[n] = sph[1]
-                phi[n] = sph[2]
-                ptrs[n] = self.tree_local[level][ccc[2], ccc[1], ccc[0], :].ctypes.get_as_parameter().value
-                n += 1
+        #        charge[n] = q
+        #        radius[n] = sph[0]
+        #        theta[n] = sph[1]
+        #        phi[n] = sph[2]
+        #        ptrs[n] = self.tree_local[level][ccc[2], ccc[1], ccc[0], :].ctypes.get_as_parameter().value
+        #        n += 1
 
-        self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
+        #self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
 
 
 

@@ -150,6 +150,28 @@ class LocalExp:
         header = str(sph_gen.header)
 
 
+        self.create_local_exp_header = header
+        self.create_local_exp_src = """
+        #define IM_OFFSET ({IM_OFFSET})
+
+        static inline void inline_local_exp(
+            const double charge,
+            const double radius,
+            const double theta,
+            const double phi,
+            double * RESTRICT out
+        ){{
+            {SPH_GEN}
+            {ASSIGN_GEN}
+            return;
+        }}
+        """.format(
+            SPH_GEN=str(sph_gen.module),
+            ASSIGN_GEN=str(assign_gen),
+            IM_OFFSET=(self.L**2),
+        )
+
+
         self._local_create_lib = simple_lib_creator(header_code=header, src_code=src)['create_local_exp']
         
 
