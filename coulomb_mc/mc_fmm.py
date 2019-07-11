@@ -101,10 +101,124 @@ class MCFMM:
         self._direct_contrib_lib = None
         self._init_direct_contrib_lib()
         self._init_indirect_accept_lib()
+        self._init_indirect_propose_lib()
     
     def free(self):
         self.tree.free()
         del self.tree_local
+
+    def _init_indirect_propose_lib(self):
+
+        source = r'''
+
+        {INLINE_LOCAL_EXP}
+
+        extern "C" int indirect_propose(
+            const REAL  * RESTRICT position,
+            const INT64            cellx,
+            const INT64            celly,
+            const INT64            cellz,
+            const REAL             charge,
+            const REAL * RESTRICT * RESTRICT moments,
+                  REAL * RESTRICT  out
+        ){{
+            
+            // work upwards through the levels
+
+            const REAL px = position[0];
+            const REAL py = position[1];
+            const REAL pz = position[2];
+
+            INT64 cx = cellx;
+            INT64 cy = celly;
+            INT64 cz = cellz;
+            
+            REAL tmp_energy = 0.0;
+
+            for( int rx=R-1 ; rx>=0 ; rx--){{
+                    
+                REAL inner_energy = 0.0;
+                const REAL oocx = -HEX + (0.5 + cx) * CELL_WIDTH_X[rx];
+                const REAL oocy = -HEY + (0.5 + cy) * CELL_WIDTH_Y[rx];
+                const REAL oocz = -HEZ + (0.5 + cz) * CELL_WIDTH_Z[rx];
+
+                REAL dx = px - oocx;
+                REAL dy = py - oocy;
+                REAL dz = pz - oocz;
+                REAL dx2 = dx*dx;
+                REAL dx2_p_dy2 = dx2 + dy*dy;
+                REAL d2 = dx2_p_dy2 + dz*dz;
+                REAL radius = sqrt(d2);
+                REAL theta = atan2(sqrt(dx2_p_dy2), dz);
+                REAL phi = atan2(dy, dx);
+
+                local_eval(radius, theta, phi, &moments[rx][NCOMP * ( cx + NUM_CELLS_X[rx] * (cy + NUM_CELLS_Y[rx] * cz))], &inner_energy);
+
+                tmp_energy += inner_energy;
+
+                // compute the cell on the next level
+
+                cx /= SUB_X;
+                cy /= SUB_Y;
+                cz /= SUB_Z;
+
+            }}
+            
+            out[0] = tmp_energy * charge;
+            return 0;
+        }}
+
+        '''.format(
+            INLINE_LOCAL_EXP=self.mc_lee.create_single_local_eval_src
+        )
+
+
+        e = self.domain.extent
+        s = self.subdivision
+        R = self.R
+
+        header = r'''
+        #include <math.h>
+        #include <stdio.h>
+        #define REAL double
+        #define INT64 int64_t
+        #define R {R}
+        #define HEX {HEX}
+        #define HEY {HEY}
+        #define HEZ {HEZ}
+        #define NCOMP {NCOMP}
+        
+        #define SUB_X {SUB_X}
+        #define SUB_Y {SUB_Y}
+        #define SUB_Z {SUB_Z}
+
+        const REAL CELL_WIDTH_X[R] = {{ {CELL_WIDTH_X} }};
+        const REAL CELL_WIDTH_Y[R] = {{ {CELL_WIDTH_Y} }};
+        const REAL CELL_WIDTH_Z[R] = {{ {CELL_WIDTH_Z} }};        
+        const INT64 NUM_CELLS_X[R] = {{ {NUM_CELLS_X} }};
+        const INT64 NUM_CELLS_Y[R] = {{ {NUM_CELLS_Y} }};
+        const INT64 NUM_CELLS_Z[R] = {{ {NUM_CELLS_Z} }};
+
+        '''.format(
+            R=self.R,
+            HEX=e[0] * 0.5,
+            HEY=e[1] * 0.5,
+            HEZ=e[2] * 0.5,
+            SUB_X=s[0],
+            SUB_Y=s[1],
+            SUB_Z=s[2],
+            CELL_WIDTH_X=','.join([str(e[0] / (s[0] ** (rx))) for rx in range(R)]),
+            CELL_WIDTH_Y=','.join([str(e[1] / (s[1] ** (rx))) for rx in range(R)]),
+            CELL_WIDTH_Z=','.join([str(e[2] / (s[2] ** (rx))) for rx in range(R)]),
+            NUM_CELLS_X=','.join([str(int(s[0] ** (rx))) for rx in range(R)]),
+            NUM_CELLS_Y=','.join([str(int(s[1] ** (rx))) for rx in range(R)]),
+            NUM_CELLS_Z=','.join([str(int(s[2] ** (rx))) for rx in range(R)]),
+            NCOMP=self.ncomp
+        )
+
+        self._indirect_propose_lib = lib.build.simple_lib_creator(header, source)['indirect_propose']
+
+
 
     def _init_indirect_accept_lib(self):
 
@@ -889,26 +1003,37 @@ class MCFMM:
         # cell on finest level
         cell = (C[px, 0], C[px, 1], C[px, 2])
         
-        radius = np.zeros(R, REAL)
-        theta = np.zeros(R, REAL)
-        phi = np.zeros(R, REAL)
-        moments = np.zeros(R, ctypes.c_void_p)
-        out = np.zeros(R, REAL)
-        
+        #radius = np.zeros(R, REAL)
+        #theta = np.zeros(R, REAL)
+        #phi = np.zeros(R, REAL)
+        #moments = np.zeros(R, ctypes.c_void_p)
+        #out = np.zeros(R, REAL)
+        #
 
-        for level in range(self.R):
-            
-            cell_level = self._get_parent(cell, level)
-            sph = self._get_cell_disp(cell_level, pos, level)
+        #for level in range(self.R):
+        #    
+        #    cell_level = self._get_parent(cell, level)
+        #    sph = self._get_cell_disp(cell_level, pos, level)
 
+        #    radius[level] = sph[0]
+        #    theta[level] = sph[1]
+        #    phi[level] = sph[2]
+        #    moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
+        #
+        #self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
+        # energy += np.sum(out) * charge
 
-            radius[level] = sph[0]
-            theta[level] = sph[1]
-            phi[level] = sph[2]
-            moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
-        
-        self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
-        energy += np.sum(out) * charge
+        energy_c = REAL(0)
+        self._indirect_propose_lib(
+            pos.ctypes.get_as_parameter(),
+            INT64(cell[0]),
+            INT64(cell[1]),
+            INT64(cell[2]),
+            REAL(charge),
+            self.tree_local_ptrs.ctypes.get_as_parameter(),
+            ctypes.byref(energy_c)
+        )
+        energy += energy_c.value
 
 
         energy_pc = REAL()
@@ -975,26 +1100,36 @@ class MCFMM:
         # cell on finest level
         cell = self._get_cell(pos)
 
-        radius = np.zeros(R, REAL)
-        theta = np.zeros(R, REAL)
-        phi = np.zeros(R, REAL)
-        moments = np.zeros(R, ctypes.c_void_p)
-        out = np.zeros(R, REAL)
+        #radius = np.zeros(R, REAL)
+        #theta = np.zeros(R, REAL)
+        #phi = np.zeros(R, REAL)
+        #moments = np.zeros(R, ctypes.c_void_p)
+        #out = np.zeros(R, REAL)
 
-        for level in range(self.R):
-            
-            cell_level = self._get_parent(cell, level)
-            sph = self._get_cell_disp(cell_level, pos, level)
+        #for level in range(self.R):
+        #    
+        #    cell_level = self._get_parent(cell, level)
+        #    sph = self._get_cell_disp(cell_level, pos, level)
 
-            radius[level] = sph[0]
-            theta[level] = sph[1]
-            phi[level] = sph[2]
-            moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
-        
-        self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
-        energy += np.sum(out) * charge
+        #    radius[level] = sph[0]
+        #    theta[level] = sph[1]
+        #    phi[level] = sph[2]
+        #    moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
+        #
+        #self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
+        #energy += np.sum(out) * charge
 
-
+        energy_c = REAL(0)
+        self._indirect_propose_lib(
+            pos.ctypes.get_as_parameter(),
+            INT64(cell[0]),
+            INT64(cell[1]),
+            INT64(cell[2]),
+            REAL(charge),
+            self.tree_local_ptrs.ctypes.get_as_parameter(),
+            ctypes.byref(energy_c)
+        )
+        energy += energy_c.value
 
         energy_pc = REAL(0)
         index_c = INT64(px)

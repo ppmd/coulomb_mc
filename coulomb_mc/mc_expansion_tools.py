@@ -84,18 +84,26 @@ class LocalExp:
         }}
         """
 
-        src = src.format(
+        src_internal = src.format(
             SPH_GEN=str(sph_gen.module),
             ASSIGN_GEN=str(assign_gen),
             IM_OFFSET=(self.L**2),
             DECLARE=r'extern "C"'
         )
+        src_lib = src.format(
+            SPH_GEN=str(sph_gen.module),
+            ASSIGN_GEN=str(assign_gen),
+            IM_OFFSET=(self.L**2),
+            DECLARE=r'static inline'
+        )
+
         header = str(sph_gen.header)
 
 
         self.create_local_eval_header = header
+        self.create_local_eval_src = src_lib
 
-        self._local_eval_lib = simple_lib_creator(header_code=header, src_code=src)['local_eval']
+        self._local_eval_lib = simple_lib_creator(header_code=header, src_code=src_internal)['local_eval']
 
         # lib to create local expansions
         
@@ -174,6 +182,61 @@ class LocalExp:
 
         self._local_create_lib = simple_lib_creator(header_code=header, src_code=src)['create_local_exp']
         
+        # --- lib to evaluate a single local expansion --- 
+
+        assign_gen = ''
+        for lx in range(self.L):
+            for mx in range(-lx, lx+1):
+                reL = SphSymbol('moments[{ind}]'.format(ind=cube_ind(lx, mx)))
+                imL = SphSymbol('moments[IM_OFFSET + {ind}]'.format(ind=cube_ind(lx, mx)))
+                reY, imY = sph_gen.get_y_sym(lx, mx)
+                phi_sym = cmplx_mul(reL, imL, reY, imY)[0]
+                assign_gen += 'tmp_energy += rhol * ({phi_sym});\n'.format(phi_sym=str(phi_sym))
+
+            assign_gen += 'rhol *= radius;\n'
+
+        src = """
+        #define IM_OFFSET ({IM_OFFSET})
+
+        {DECLARE} int local_eval(
+            const double radius,
+            const double theta,
+            const double phi,
+            const double * RESTRICT moments,
+            double * RESTRICT out
+        ){{
+            {SPH_GEN}
+            double rhol = 1.0;
+            double tmp_energy = 0.0;
+            {ASSIGN_GEN}
+
+            out[0] = tmp_energy;
+            return 0;
+        }}
+        """
+        
+        src_lib = src.format(
+            SPH_GEN=str(sph_gen.module),
+            ASSIGN_GEN=str(assign_gen),
+            IM_OFFSET=(self.L**2),
+            DECLARE=r'static inline'
+        )
+
+        src = src.format(
+            SPH_GEN=str(sph_gen.module),
+            ASSIGN_GEN=str(assign_gen),
+            IM_OFFSET=(self.L**2),
+            DECLARE=r'extern "C"'
+        )
+        header = str(sph_gen.header)
+
+
+        self.create_single_local_eval_header = header
+        self.create_single_local_eval_src = src_lib
+
+        self._single_local_eval_lib = simple_lib_creator(header_code=header, src_code=src)['local_eval']
+
+
 
     def compute_phi_local(self, n, radius, theta, phi, moments, out):
         """
