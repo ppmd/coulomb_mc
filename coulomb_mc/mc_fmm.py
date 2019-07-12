@@ -1,17 +1,20 @@
 
 
 import numpy as np
-from ppmd import data, loop, kernel, access, lib
+from ppmd import data, loop, kernel, access, lib, opt
 from ppmd.coulomb import fmm_interaction_lists, octal
 from coulomb_kmc import kmc_expansion_tools, common
 import ctypes
 import math
 
 from coulomb_mc import mc_expansion_tools
+import time
 
 Constant = kernel.Constant
 REAL = ctypes.c_double
 INT64 = ctypes.c_int64
+
+PROFILE = opt.PROFILE
 
 class MCFMM:
 
@@ -1022,7 +1025,8 @@ class MCFMM:
         #
         #self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
         # energy += np.sum(out) * charge
-
+        
+        t0 = time.time()
         energy_c = REAL(0)
         self._indirect_propose_lib(
             pos.ctypes.get_as_parameter(),
@@ -1034,11 +1038,13 @@ class MCFMM:
             ctypes.byref(energy_c)
         )
         energy += energy_c.value
+        self._profile_inc('indirect_old', time.time() - t0)
 
 
         energy_pc = REAL()
         index_c = INT64(px)
-
+        
+        t0 = time.time()
         self._direct_contrib_lib(
             INT64(0),                         #// -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
             INT64(1),                          #//number of contributions to compute
@@ -1058,7 +1064,8 @@ class MCFMM:
         )
         energy_c = energy_pc.value
         energy += energy_c
-        
+        self._profile_inc('direct_old', time.time() - t0)
+
         #energy_py = 0.0
         #for ox in self.il[1]:
 
@@ -1119,6 +1126,7 @@ class MCFMM:
         #self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
         #energy += np.sum(out) * charge
 
+        t0 = time.time()
         energy_c = REAL(0)
         self._indirect_propose_lib(
             pos.ctypes.get_as_parameter(),
@@ -1130,7 +1138,10 @@ class MCFMM:
             ctypes.byref(energy_c)
         )
         energy += energy_c.value
+        self._profile_inc('indirect_new', time.time() - t0)
 
+
+        t0 = time.time()
         energy_pc = REAL(0)
         index_c = INT64(px)
         tpos = np.array((pos[0], pos[1], pos[2]), REAL)
@@ -1154,7 +1165,7 @@ class MCFMM:
         )
         energy_c = energy_pc.value
         energy += energy_c
-
+        self._profile_inc('indirect_new', time.time() - t0)
 
         #energy_py = 0.0
         #for ox in self.il[1]:
@@ -1205,6 +1216,7 @@ class MCFMM:
         self_energy = self._get_self_interaction(px, pos)
         #print("\t-->", old_energy, new_energy, self_energy)
 
+        self._profile_inc('num_propose', 1)
         return  new_energy - old_energy - self_energy
 
 
@@ -1223,6 +1235,7 @@ class MCFMM:
 
 
     def accept(self, move, energy_diff=None):
+        t0 = time.time()
         px = int(move[0])
         new_pos = move[1]
 
@@ -1273,7 +1286,9 @@ class MCFMM:
         new_position = np.array((new_pos[0], new_pos[1], new_pos[2]), REAL)
         old_position = np.array((old_pos[0], old_pos[1], old_pos[2]), REAL)
 
+        self._profile_inc('direct_accept', time.time() - t0)       
 
+        t0 = time.time()
         self._indirect_accept_lib(
             old_position.ctypes.get_as_parameter(),
             new_position.ctypes.get_as_parameter(),
@@ -1281,7 +1296,7 @@ class MCFMM:
             self.il_array.ctypes.get_as_parameter(),
             self.tree_local_ptrs.ctypes.get_as_parameter()
         )
-
+        self._profile_inc('indirect_accept', time.time() - t0)
 
         ### to pass into lib
         #charge = np.zeros(self.il_max_len * self.R, REAL)
@@ -1367,8 +1382,7 @@ class MCFMM:
         #self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
 
 
-
-
+        t0 = time.time()
         assert self.comm.size == 1
         with g._mc_fmm_cells.modify_view() as m:
             m[px, :] = new_cell
@@ -1378,8 +1392,31 @@ class MCFMM:
         with self.positions.modify_view() as m:
             m[px, :] = new_pos.copy()
 
+        self._profile_inc('dats_accept', time.time() - t0)
+        self._profile_inc('num_accept', 1)
+
+
+
+    def _profile_inc(self, key, inc):
+        key = self.__class__.__name__ + ':' + key
+        if key not in PROFILE.keys():
+            PROFILE[key] = inc
+        else:
+            PROFILE[key] += inc
+
+    def _profile_get(self, key):
+        key = self.__class__.__name__ + ':' + key
+        return PROFILE[key]
+
+    def _profile_set(self, key, inc):
+        key = self.__class__.__name__ + ':' + key
+        if key not in PROFILE.keys():
+            PROFILE[key] = inc
+        else:
+            PROFILE[key] = inc 
+
+
+
+
  
-
-
-
 
