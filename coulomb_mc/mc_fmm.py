@@ -132,28 +132,49 @@ class MCFMM:
             const REAL py = position[1];
             const REAL pz = position[2];
 
-            INT64 cx = cellx;
-            INT64 cy = celly;
-            INT64 cz = cellz;
+            INT64 cxo = cellx;
+            INT64 cyo = celly;
+            INT64 czo = cellz;
             
             REAL tmp_energy = 0.0;
 
+            INT64 CELL_X[R];
+            INT64 CELL_Y[R];
+            INT64 CELL_Z[R];
+            
             for( int rx=R-1 ; rx>=0 ; rx--){{
+
+                CELL_X[rx] = cxo;
+                CELL_Y[rx] = cyo;
+                CELL_Z[rx] = czo;
+                    
+                cxo /= SUB_X;
+                cyo /= SUB_Y;
+                czo /= SUB_Z;
+            }}
+
+            
+            #pragma omp parallel for schedule(static, 1) reduction(+:tmp_energy)
+            for( int rx=R-1 ; rx>=0 ; rx--){{
+                const INT64 cx = CELL_X[rx];
+                const INT64 cy = CELL_Y[rx];
+                const INT64 cz = CELL_Z[rx];
+
                     
                 REAL inner_energy = 0.0;
                 const REAL oocx = -HEX + (0.5 + cx) * CELL_WIDTH_X[rx];
                 const REAL oocy = -HEY + (0.5 + cy) * CELL_WIDTH_Y[rx];
                 const REAL oocz = -HEZ + (0.5 + cz) * CELL_WIDTH_Z[rx];
 
-                REAL dx = px - oocx;
-                REAL dy = py - oocy;
-                REAL dz = pz - oocz;
-                REAL dx2 = dx*dx;
-                REAL dx2_p_dy2 = dx2 + dy*dy;
-                REAL d2 = dx2_p_dy2 + dz*dz;
-                REAL radius = sqrt(d2);
-                REAL theta = atan2(sqrt(dx2_p_dy2), dz);
-                REAL phi = atan2(dy, dx);
+                const REAL dx = px - oocx;
+                const REAL dy = py - oocy;
+                const REAL dz = pz - oocz;
+                const REAL dx2 = dx*dx;
+                const REAL dx2_p_dy2 = dx2 + dy*dy;
+                const REAL d2 = dx2_p_dy2 + dz*dz;
+                const REAL radius = sqrt(d2);
+                const REAL theta = atan2(sqrt(dx2_p_dy2), dz);
+                const REAL phi = atan2(dy, dx);
 
                 local_eval(radius, theta, phi, &moments[rx][NCOMP * ( cx + NUM_CELLS_X[rx] * (cy + NUM_CELLS_Y[rx] * cz))], &inner_energy);
 
@@ -161,12 +182,9 @@ class MCFMM:
 
                 // compute the cell on the next level
 
-                cx /= SUB_X;
-                cy /= SUB_Y;
-                cz /= SUB_Z;
-
             }}
             
+
             out[0] = tmp_energy * charge;
             return 0;
         }}
@@ -446,7 +464,7 @@ class MCFMM:
             
             REAL UTOTAL = 0.0;
 
-            #pragma omp parallel for reduction(+: UTOTAL)
+            #pragma omp parallel for reduction(+: UTOTAL) if((n>1))
             for(INT64 px=0 ; px<n ; px++){{
                 
                 INT64 ix1;
@@ -491,6 +509,9 @@ class MCFMM:
                 const INT64 idi = IDS[ix];
                 
                 //for each offset
+
+
+                //#pragma omp parallel for reduction(+: UTMP) if((n==1)) schedule(static,1)
                 for(INT64 ox=0 ; ox<noffsets ; ox++){{
                     
                     const INT64 ocx = CIX + NNMAP[ox * 3 + 0];
@@ -830,6 +851,8 @@ class MCFMM:
             start_ptrs[rx] = self.tree_local[rx].ctypes.get_as_parameter().value
 
         self._cell_bin_loop.execute()
+        self._profile_inc('_cell_bin_wrapper', self._cell_bin_loop.wrapper_timer.time())
+
         self.max_occupancy = np.max(self.cell_occupation_ga[:])
         s = self.subdivision
         s = [sx ** (self.R - 1) for sx in s]
@@ -1165,7 +1188,7 @@ class MCFMM:
         )
         energy_c = energy_pc.value
         energy += energy_c
-        self._profile_inc('indirect_new', time.time() - t0)
+        self._profile_inc('direct_new', time.time() - t0)
 
         #energy_py = 0.0
         #for ox in self.il[1]:
