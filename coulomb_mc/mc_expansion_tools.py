@@ -124,9 +124,7 @@ class LocalExp:
         
 
         src = """
-        #define IM_OFFSET ({IM_OFFSET})
-        #define REAL double
-        #define INT64 int64_t
+
 
         extern "C" int create_local_exp(
             const INT64 n,
@@ -155,7 +153,15 @@ class LocalExp:
             ASSIGN_GEN=str(assign_gen),
             IM_OFFSET=(self.L**2),
         )
-        header = str(sph_gen.header)
+        header = str(sph_gen.header) + '''
+        #define IM_OFFSET ({IM_OFFSET})
+        #define REAL double
+        #define INT64 int64_t
+        '''.format(
+            SPH_GEN=str(sph_gen.module),
+            ASSIGN_GEN=str(assign_gen),
+            IM_OFFSET=(self.L**2),
+        )
 
 
         self.create_local_exp_header = header

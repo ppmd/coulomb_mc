@@ -38,6 +38,19 @@ class MCFMM:
         for rx in range(self.R):
             self.tree_local_ptrs[rx] = self.tree_local[rx].ctypes.get_as_parameter().value
         
+        
+        self.tree_local_ga = data.GlobalArray(ncomp=self.tree_local.num_cells() * self.ncomp, dtype=REAL)
+        self.tree_local_ga_offsets = data.ScalarArray(ncomp=self.R+1, dtype=INT64)
+        
+        
+        t = 0
+        self.tree_local_ga_offsets[0] = 0
+        for rx in range(self.R):
+            t += self.tree_local.num_data[rx]
+            self.tree_local_ga_offsets[rx + 1] = t
+    
+        
+        
         # interaction lists
         self.il = fmm_interaction_lists.compute_interaction_lists(domain.extent, self.subdivision)
         self.il_max_len = max(len(lx) for lx in self.il[0])
@@ -84,6 +97,12 @@ class MCFMM:
         g._mc_cz = pd(ncomp=l, dtype=INT64)
         g._mc_cl = pd(ncomp=l, dtype=INT64)
         g._mc_ptrs = pd(ncomp=ptr_l, dtype=INT64)
+        
+        tmp = 0
+        for datx in g.particle_dats:
+            tmp += getattr(g, datx)._dat.nbytes
+        self.dat_size = tmp
+
         
         s = self.subdivision
         s = [sx ** (self.R - 1) for sx in s]
@@ -695,12 +714,24 @@ class MCFMM:
                 MC_DY.i[ox] = atan2(sqrt(xy2), dz);
                 MC_DZ.i[ox] = atan2(dy, dx);
                 MC_CHR.i[ox] = Q.i[0];
+
+
+                inline_local_exp(
+                    Q.i[0], 
+                    sqrt(xy2 + dz * dz),
+                    atan2(sqrt(xy2), dz),
+                    atan2(dy, dx),
+                    &TL[TL_OFFSETS[MC_LEVEL.i[ox]] + NCOMP * MC_CL.i[ox]]
+                );
+
+
             }}
 
             '''.format(
             ),
-            (
+            (   
                 Constant('R', self.R),
+                Constant('NCOMP', self.ncomp),
                 Constant('EX', extent[0]),
                 Constant('EY', extent[1]),
                 Constant('EZ', extent[2]),
@@ -718,6 +749,12 @@ class MCFMM:
                 Constant('SDZ', self.subdivision[2]),
                 Constant('IL_NO', self.il_array.shape[1]),
                 Constant('IL_STRIDE_OUTER', self.il_array.shape[1] * self.il_array.shape[2]),
+            ),
+            headers=(
+                lib.build.write_header(
+                    self.mc_lee.create_local_exp_header + \
+                    self.mc_lee.create_local_exp_src
+                ),
             )
         )
 
@@ -737,6 +774,8 @@ class MCFMM:
             'MC_CZ': g._mc_cz(access.WRITE),
             'MC_CL': g._mc_cl(access.WRITE),
             'OCC_GA': self.cell_occupation_ga(access.INC_ZERO),
+            'TL_OFFSETS': self.tree_local_ga_offsets(access.READ),
+            'TL': self.tree_local_ga(access.INC_ZERO),
         }
 
         self._cell_bin_loop = loop.ParticleLoopOMP(kernel=k, dat_dict=dat_dict)
@@ -858,36 +897,48 @@ class MCFMM:
         s = [sx ** (self.R - 1) for sx in s]
         self.cell_occupation = self.cell_occupation_ga[:].copy().reshape((s[2], s[1], s[0]))
 
-        mc_nexp = g._mc_nexp.view
-        mc_charge = g._mc_charge.view
-        mc_radius = g._mc_radius.view
-        mc_theta = g._mc_theta.view
-        mc_phi = g._mc_phi.view
-        mc_ptrs = g._mc_ptrs.view
-        mc_level = g._mc_level.view
-        mc_cl = g._mc_cl.view
+        # mc_nexp = g._mc_nexp.view
+        # mc_charge = g._mc_charge.view
+        # mc_radius = g._mc_radius.view
+        # mc_theta = g._mc_theta.view
+        # mc_phi = g._mc_phi.view
+        # mc_ptrs = g._mc_ptrs.view
+        # mc_level = g._mc_level.view
+        # mc_cl = g._mc_cl.view
 
-        self._cell_bin_format_lib(
-            INT64(N),
-            INT64(self.il_max_len * self.R),
-            INT64(self.il_pd_ptr_stride),
-            mc_nexp.ctypes.get_as_parameter(),
-            mc_level.ctypes.get_as_parameter(),
-            mc_cl.ctypes.get_as_parameter(),
-            start_ptrs.ctypes.get_as_parameter(),
-            mc_ptrs.ctypes.get_as_parameter()
-        )
+        # self._cell_bin_format_lib(
+        #     INT64(N),
+        #     INT64(self.il_max_len * self.R),
+        #     INT64(self.il_pd_ptr_stride),
+        #     mc_nexp.ctypes.get_as_parameter(),
+        #     mc_level.ctypes.get_as_parameter(),
+        #     mc_cl.ctypes.get_as_parameter(),
+        #     start_ptrs.ctypes.get_as_parameter(),
+        #     mc_ptrs.ctypes.get_as_parameter()
+        # )
 
 
-        for px in range(N):
-            self.mc_lee.compute_local_exp(
-                mc_nexp[px, 0],
-                mc_charge[px,:],
-                mc_radius[px, :],
-                mc_theta[px, :],
-                mc_phi[px, :],
-                mc_ptrs[px, :]
-            )
+        # for px in range(N):
+        #     self.mc_lee.compute_local_exp(
+        #         mc_nexp[px, 0],
+        #         mc_charge[px,:],
+        #         mc_radius[px, :],
+        #         mc_theta[px, :],
+        #         mc_phi[px, :],
+        #         mc_ptrs[px, :]
+        #     )
+
+
+        for rx in range(self.R):
+            
+            s = self.tree_local_ga_offsets[rx]
+            e = self.tree_local_ga_offsets[rx+1]
+            # err = np.linalg.norm(self.tree_local_ga[s:e:] - self.tree_local[rx].ravel())
+            # print(rx, err)
+            self.tree_local[rx].ravel()[:] = self.tree_local_ga[s:e:].copy()
+
+
+
 
         return
         # to pass into lib
