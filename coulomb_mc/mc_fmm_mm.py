@@ -42,12 +42,7 @@ class MCFMM_MM:
 
 
     def initialise(self):
-        
         self.energy = self.mm(self.positions, self.charges)
-
-
-
-
 
 
 
@@ -56,7 +51,10 @@ class MCFMM_MM:
         pos = move[1]
 
         old_energy = self._get_old_energy(px)
-        print(old_energy)
+        new_energy = self._get_new_energy(pos, self.charges[px, 0])
+        self_energy = self._get_self_interaction(px, pos)
+        #print("M\t-->", old_energy, new_energy, self_energy)
+        return new_energy - old_energy - self_energy
 
     
     def _get_new_energy(self, position, charge):
@@ -92,13 +90,15 @@ class MCFMM_MM:
         for rx in range(self.R-1, -1, -1):
             mm_cells[rx, :] = (c0, c1, c2)
             mm_child_index[rx, :] = (
-                c0 % sl0,
-                c1 % sl1,
-                c2 % sl2
+                c0 % sd0,
+                c1 % sd1,
+                c2 % sd2
             )
             c0 //= sd0
             c1 //= sd1
             c2 //= sd2
+
+        new_cell = mm_cells[self.R-1, :].copy()
 
             
         self._indirect_lib(
@@ -118,16 +118,45 @@ class MCFMM_MM:
             ctypes.byref(ie),
         )    
 
+        #print("MIN", ie.value)
+
+        de = REAL(0)
+
+        self._direct_lib(
+            INT64(1),
+            INT64(0),
+            INT64(self.mm.max_occ), 
+            INT64(self.mm.il_earray.shape[0]),
+            self.mm.il_earray.ctypes.get_as_parameter(),
+            self.mm.sh.get_pointer(self.positions(access.READ)),
+            self.mm.sh.get_pointer(self.charges(access.READ)),                      
+            position.ctypes.get_as_parameter(),
+            ctypes.byref(charge),
+            new_cell.ctypes.get_as_parameter(),
+            self.mm.minc.ctypes.get_as_parameter(),
+            self.mm.widths.ctypes.get_as_parameter(),
+            self.mm.cell_occ.ctypes.get_as_parameter(),
+            self.mm.cell_list.ctypes.get_as_parameter(),
+            ctypes.byref(de)
+        )
+
+
+        #print("MDN", de.value)
+
+
+        return ie.value + de.value
 
 
 
+    def _get_self_interaction(self, px, pos):
 
+        charge = self.charges[px, 0]
+        old_pos = self.positions[px, :]
 
-
+        return charge * charge / np.linalg.norm(old_pos.ravel() - pos.ravel())
 
     
 
-    
     def _get_old_energy(self, ix):
         
         ie = REAL(0)
@@ -153,12 +182,15 @@ class MCFMM_MM:
         de = REAL(0)
 
         self._direct_lib(
+            INT64(0),
             INT64(ix),
             INT64(self.mm.max_occ), 
             INT64(self.mm.il_earray.shape[0]),
             self.mm.il_earray.ctypes.get_as_parameter(),
             self.mm.sh.get_pointer(self.positions(access.READ)),
             self.mm.sh.get_pointer(self.charges(access.READ)),
+            self.mm.sh.get_pointer(self.positions(access.READ)),
+            self.mm.sh.get_pointer(self.charges(access.READ)),           
             self.mm.cell_remaps.ctypes.get_as_parameter(),
             self.mm.minc.ctypes.get_as_parameter(),
             self.mm.widths.ctypes.get_as_parameter(),
@@ -405,12 +437,15 @@ class MCFMM_MM:
 
         source = r'''
         extern "C" int direct_interactions(
+            const INT64            old_flag,                // 0 if computing old interations
             const INT64            ix,
             const INT64            MAX_OCC, 
             const INT64            NOFFSETS,                //number of nearest neighbour cells
             const INT64 * RESTRICT NNMAP,                   //nearest neighbour offsets
-            const REAL  * RESTRICT positions,
-            const REAL  * RESTRICT charges,
+            const REAL  *          indexed_positions,
+            const REAL  *          indexed_charges,
+            const REAL  *          positions,
+            const REAL  *          charges,
             const INT64 * RESTRICT cells,
             const INT64 * RESTRICT cell_mins,
             const INT64 * RESTRICT cell_counts,
@@ -459,17 +494,17 @@ class MCFMM_MM:
 
                 const INT64 cj = ocx + cell_counts[0] * (ocy + cell_counts[1] * ocz);
 
-                const int mask = (NNMAP[ox * 3 + 0] == 0) && (NNMAP[ox * 3 + 1] == 0) && (NNMAP[ox * 3 + 2] == 0);
+                const int mask = ((NNMAP[ox * 3 + 0] == 0) && (NNMAP[ox * 3 + 1] == 0) && (NNMAP[ox * 3 + 2] == 0)) && (old_flag < 1);
                 
                 if (mask) {{
                     for(INT64 jxi=0 ; jxi<cell_occ[cj] ; jxi++){{
                         
                         const INT64 jx = cell_list[cj * MAX_OCC + jxi];
 
-                        const REAL pjx = positions[jx * 3 + 0];
-                        const REAL pjy = positions[jx * 3 + 1];
-                        const REAL pjz = positions[jx * 3 + 2];
-                        const REAL qj = charges[jx];
+                        const REAL pjx = indexed_positions[jx * 3 + 0];
+                        const REAL pjy = indexed_positions[jx * 3 + 1];
+                        const REAL pjz = indexed_positions[jx * 3 + 2];
+                        const REAL qj  = indexed_charges[jx];
 
 
                         const REAL dx = pix - pjx;
@@ -488,10 +523,10 @@ class MCFMM_MM:
                         
                         const INT64 jx = cell_list[cj * MAX_OCC + jxi];
 
-                        const REAL pjx = positions[jx * 3 + 0];
-                        const REAL pjy = positions[jx * 3 + 1];
-                        const REAL pjz = positions[jx * 3 + 2];
-                        const REAL qj = charges[jx];
+                        const REAL pjx = indexed_positions[jx * 3 + 0];
+                        const REAL pjy = indexed_positions[jx * 3 + 1];
+                        const REAL pjz = indexed_positions[jx * 3 + 2];
+                        const REAL qj  = indexed_charges[jx];
 
 
                         const REAL dx = pix - pjx;

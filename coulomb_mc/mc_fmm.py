@@ -929,24 +929,7 @@ class MCFMM:
         # cell on finest level
         cell = self._get_cell(pos)
 
-        #radius = np.zeros(R, REAL)
-        #theta = np.zeros(R, REAL)
-        #phi = np.zeros(R, REAL)
-        #moments = np.zeros(R, ctypes.c_void_p)
-        #out = np.zeros(R, REAL)
 
-        #for level in range(self.R):
-        #    
-        #    cell_level = self._get_parent(cell, level)
-        #    sph = self._get_cell_disp(cell_level, pos, level)
-
-        #    radius[level] = sph[0]
-        #    theta[level] = sph[1]
-        #    phi[level] = sph[2]
-        #    moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
-        #
-        #self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
-        #energy += np.sum(out) * charge
 
         t0 = time.time()
         energy_c = REAL(0)
@@ -961,6 +944,8 @@ class MCFMM:
         )
         energy += energy_c.value
         self._profile_inc('indirect_new', time.time() - t0)
+
+        #print("LIN", energy)
 
 
         t0 = time.time()
@@ -989,29 +974,7 @@ class MCFMM:
         energy += energy_c
         self._profile_inc('direct_new', time.time() - t0)
 
-        #energy_py = 0.0
-        #for ox in self.il[1]:
-        #    ccc = (
-        #        cell[0] + ox[0],
-        #        cell[1] + ox[1],
-        #        cell[2] + ox[2],
-        #    )
-        #    if ccc[0] < 0: continue
-        #    if ccc[1] < 0: continue
-        #    if ccc[2] < 0: continue
-        #    if ccc[0] >= sl: continue
-        #    if ccc[1] >= sl: continue
-        #    if ccc[2] >= sl: continue
-
-        #    ccc = tuple(ccc)
-        #    if ccc not in self.direct_map: continue
-
-        #    for jx in self.direct_map[ccc]:
-        #        energy_py += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
-
-
-        #energy += energy_py
-
+        #print("LDN", energy_c)
 
         return energy
     
@@ -1036,7 +999,7 @@ class MCFMM:
         old_energy = self._get_old_energy(px)
         new_energy = self._get_new_energy(px, pos)
         self_energy = self._get_self_interaction(px, pos)
-        #print("\t-->", old_energy, new_energy, self_energy)
+        #print("L\t-->", old_energy, new_energy, self_energy)
 
         self._profile_inc('num_propose', 1)
         return  new_energy - old_energy - self_energy
