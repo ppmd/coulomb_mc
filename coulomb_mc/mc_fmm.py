@@ -118,7 +118,6 @@ class MCFMM(MCCommon):
         self.energy = None
 
         self._cell_bin_loop = None
-        self._cell_bin_format_lib = None
         self._init_bin_loop()
 
         self._init_indirect_accept_lib()
@@ -635,39 +634,7 @@ class MCFMM(MCCommon):
 
         self._cell_bin_loop = loop.ParticleLoopOMP(kernel=k, dat_dict=dat_dict)
 
-        # create the lib that takes the particledat data and produces the data for the local expansion lib
 
-        source = '''
-        extern "C" int bookkeeping_entry(
-            const int64_t n,            // number of particles
-            const int64_t l,            // normal stride
-            const int64_t mc_cl_stride, // pointer dat stride
-            const int64_t * MC_NEXP,
-            const int64_t * MC_LEVEL,
-            const int64_t * MC_CL,      // linear index on each level
-            double ** start_ptrs,       // the starting pointer for each level
-            double ** MC_PTRS 
-        ){{
-            int err = 0;
-            
-            #pragma omp parallel for
-            for( int ix=0 ; ix<n ; ix++ ){{
-                for(int ox=0 ; ox<MC_NEXP[ix] ; ox++){{
-                    MC_PTRS[ix * mc_cl_stride + ox] = start_ptrs[MC_LEVEL[ix * l + ox]] + (MC_CL[ix * l + ox] * {NCOMP});
-                }}
-            }}
-
-            return err;
-        }}
-        '''.format(
-            NCOMP=self.ncomp
-        )
-
-        header = '''
-        #include <stdio.h>
-        '''.format()
-
-        self._cell_bin_format_lib = lib.build.simple_lib_creator(header, source)['bookkeeping_entry']
 
     
     

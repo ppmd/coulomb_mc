@@ -39,6 +39,13 @@ class DirectCommon(MCCommon):
         self.dat_cells = dat_cells
         self.dat_gids = dat_gids
 
+        assert dat_gids.ncomp == 1
+        assert dat_gids.dtype == INT64
+
+        assert dat_cells.ncomp == 3
+        assert dat_cells.dtype == INT64
+
+
         # interaction lists
         self.il = fmm_interaction_lists.compute_interaction_lists(domain.extent, self.subdivision)
         self.il_earray = np.array(self.il[1], INT64)

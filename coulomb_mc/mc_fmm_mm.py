@@ -12,6 +12,10 @@ import time
 
 
 from ppmd.coulomb.sph_harm import *
+from coulomb_mc.mc_direct import DirectCommon
+from coulomb_mc.mc_common import MCCommon
+
+
 
 Constant = kernel.Constant
 REAL = ctypes.c_double
@@ -19,7 +23,7 @@ INT64 = ctypes.c_int64
 
 PROFILE = opt.PROFILE
 
-class MCFMM_MM:
+class MCFMM_MM(MCCommon):
 
     def __init__(self, positions, charges, domain, boundary_condition, r, l):
 
@@ -33,17 +37,26 @@ class MCFMM_MM:
         self.ncomp = (self.L ** 2) * 2
         self.group = self.positions.group
 
-
         self.mm = mm.PyMM(positions, charges, domain, boundary_condition, r, l)
 
         self.energy = None
+
+        pd = type(self.charges)
+        self.group._mc_mm_ids = pd(ncomp=1, dtype=INT64)
+        self.direct = DirectCommon(positions, charges, domain, boundary_condition,
+            r, self.mm.subdivision, self.group._mm_fine_cells, self.group._mc_mm_ids)
 
         self._init_libs()
 
 
     def initialise(self):
-        self.energy = self.mm(self.positions, self.charges)
+        N = self.positions.npart_local
+        g = self.positions.group
+        with g._mc_mm_ids.modify_view() as mv:
+            mv[:, 0] = np.arange(N)
 
+        self.energy = self.mm(self.positions, self.charges)
+        self.direct.initialise()
 
 
     def propose(self, move):
@@ -51,7 +64,7 @@ class MCFMM_MM:
         pos = move[1]
 
         old_energy = self._get_old_energy(px)
-        new_energy = self._get_new_energy(pos, self.charges[px, 0])
+        new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
         self_energy = self._get_self_interaction(px, pos)
         #print("M\t-->", old_energy, new_energy, self_energy)
         return new_energy - old_energy - self_energy
@@ -70,13 +83,7 @@ class MCFMM_MM:
 
 
 
-
-
-
-
-
-
-    def _get_new_energy(self, position, charge):
+    def _get_new_energy(self, ix, position, charge):
 
 
         ie = REAL(0)
@@ -137,33 +144,8 @@ class MCFMM_MM:
             ctypes.byref(ie),
         )    
 
-        #print("MIN", ie.value)
-
-        de = REAL(0)
-
-        self._direct_lib(
-            INT64(1),
-            INT64(0),
-            INT64(self.mm.max_occ), 
-            INT64(self.mm.il_earray.shape[0]),
-            self.mm.il_earray.ctypes.get_as_parameter(),
-            self.mm.sh.get_pointer(self.positions(access.READ)),
-            self.mm.sh.get_pointer(self.charges(access.READ)),                      
-            position.ctypes.get_as_parameter(),
-            ctypes.byref(charge),
-            new_cell.ctypes.get_as_parameter(),
-            self.mm.minc.ctypes.get_as_parameter(),
-            self.mm.widths.ctypes.get_as_parameter(),
-            self.mm.cell_occ.ctypes.get_as_parameter(),
-            self.mm.cell_list.ctypes.get_as_parameter(),
-            ctypes.byref(de)
-        )
-
-
-        #print("MDN", de.value)
-
-
-        return ie.value + de.value
+        direct_contrib = self.direct.get_new_energy(ix, position)
+        return ie.value + direct_contrib
 
 
 
@@ -197,28 +179,9 @@ class MCFMM_MM:
             ctypes.byref(ie),
         )
 
+        direct_contrib = self.direct.get_old_energy(ix)
+        return ie.value + direct_contrib
 
-        de = REAL(0)
-
-        self._direct_lib(
-            INT64(0),
-            INT64(ix),
-            INT64(self.mm.max_occ), 
-            INT64(self.mm.il_earray.shape[0]),
-            self.mm.il_earray.ctypes.get_as_parameter(),
-            self.mm.sh.get_pointer(self.positions(access.READ)),
-            self.mm.sh.get_pointer(self.charges(access.READ)),
-            self.mm.sh.get_pointer(self.positions(access.READ)),
-            self.mm.sh.get_pointer(self.charges(access.READ)),           
-            self.mm.cell_remaps.ctypes.get_as_parameter(),
-            self.mm.minc.ctypes.get_as_parameter(),
-            self.mm.widths.ctypes.get_as_parameter(),
-            self.mm.cell_occ.ctypes.get_as_parameter(),
-            self.mm.cell_list.ctypes.get_as_parameter(),
-            ctypes.byref(de)
-        )
-
-        return ie.value + de.value
 
 
 
@@ -451,150 +414,6 @@ class MCFMM_MM:
         )
 
         self._indirect_lib = lib.build.simple_lib_creator('#include <math.h>', src)['get_energy']
-
-
-
-        source = r'''
-        extern "C" int direct_interactions(
-            const INT64            old_flag,                // 0 if computing old interations
-            const INT64            ix,
-            const INT64            MAX_OCC, 
-            const INT64            NOFFSETS,                //number of nearest neighbour cells
-            const INT64 * RESTRICT NNMAP,                   //nearest neighbour offsets
-            const REAL  *          indexed_positions,
-            const REAL  *          indexed_charges,
-            const REAL  *          positions,
-            const REAL  *          charges,
-            const INT64 * RESTRICT cells,
-            const INT64 * RESTRICT cell_mins,
-            const INT64 * RESTRICT cell_counts,
-                  INT64 * RESTRICT cell_occ,
-                  INT64 * RESTRICT cell_list,
-                  REAL  * RESTRICT total_energy
-        ){{ 
-
-
-            // direct interactions for local charges
-
-            const REAL pix = positions[ix * 3 + 0];
-            const REAL piy = positions[ix * 3 + 1];
-            const REAL piz = positions[ix * 3 + 2];
-            const INT64 cix = cells[ix * 3 + 0];
-            const INT64 ciy = cells[ix * 3 + 1];
-            const INT64 ciz = cells[ix * 3 + 2];
-            const REAL qi = charges[ix];
-            
-            REAL tmp_energy = 0.0;
-            for(INT64 ox=0 ; ox<NOFFSETS ; ox++){{
-
-                INT64 ocx = cix + NNMAP[ox * 3 + 0];
-                INT64 ocy = ciy + NNMAP[ox * 3 + 1];
-                INT64 ocz = ciz + NNMAP[ox * 3 + 2];
-                
-                // free space BCs
-                if (ocx < 0) {{continue;}}
-                if (ocy < 0) {{continue;}}
-                if (ocz < 0) {{continue;}}
-                if (ocx >= LCX) {{continue;}}
-                if (ocy >= LCY) {{continue;}}
-                if (ocz >= LCZ) {{continue;}}
-                
-                ocx -= cell_mins[0];
-                ocy -= cell_mins[1];
-                ocz -= cell_mins[2];
-
-                // if a plane of edge cells is empty they may not exist in the data structure
-                if (ocx < 0) {{continue;}}
-                if (ocy < 0) {{continue;}}
-                if (ocz < 0) {{continue;}}
-                if (ocx >= cell_counts[0]) {{continue;}}
-                if (ocy >= cell_counts[1]) {{continue;}}
-                if (ocz >= cell_counts[2]) {{continue;}}                   
-
-                const INT64 cj = ocx + cell_counts[0] * (ocy + cell_counts[1] * ocz);
-
-                const int mask = ((NNMAP[ox * 3 + 0] == 0) && (NNMAP[ox * 3 + 1] == 0) && (NNMAP[ox * 3 + 2] == 0)) && (old_flag < 1);
-                
-                if (mask) {{
-                    for(INT64 jxi=0 ; jxi<cell_occ[cj] ; jxi++){{
-                        
-                        const INT64 jx = cell_list[cj * MAX_OCC + jxi];
-
-                        const REAL pjx = indexed_positions[jx * 3 + 0];
-                        const REAL pjy = indexed_positions[jx * 3 + 1];
-                        const REAL pjz = indexed_positions[jx * 3 + 2];
-                        const REAL qj  = indexed_charges[jx];
-
-
-                        const REAL dx = pix - pjx;
-                        const REAL dy = piy - pjy;
-                        const REAL dz = piz - pjz;
-
-                        const REAL r2 = dx*dx + dy*dy + dz*dz;
-                        
-                        tmp_energy += (ix == jx) ? 0.0 :  qj / sqrt(r2);
-                    
-
-                    }}
-
-                }} else {{
-                    for(INT64 jxi=0 ; jxi<cell_occ[cj] ; jxi++){{
-                        
-                        const INT64 jx = cell_list[cj * MAX_OCC + jxi];
-
-                        const REAL pjx = indexed_positions[jx * 3 + 0];
-                        const REAL pjy = indexed_positions[jx * 3 + 1];
-                        const REAL pjz = indexed_positions[jx * 3 + 2];
-                        const REAL qj  = indexed_charges[jx];
-
-
-                        const REAL dx = pix - pjx;
-                        const REAL dy = piy - pjy;
-                        const REAL dz = piz - pjz;
-
-                        const REAL r2 = dx*dx + dy*dy + dz*dz;
-                        
-                        tmp_energy += qj / sqrt(r2);
-
-                    }}
-                }}
-
-            }}
-
-
-            total_energy[0] = tmp_energy * qi;
-
-            return 0;
-        }}
-
-        '''.format(
-        )
-
-        header = r'''
-        #include <math.h>
-        #include <stdio.h>
-        #define REAL double
-        #define INT64 int64_t
-        #define LCX {LCX}
-        #define LCY {LCY}
-        #define LCZ {LCZ}
-        '''.format(
-            LCX=self.mm.subdivision[0] ** (self.R - 1),
-            LCY=self.mm.subdivision[1] ** (self.R - 1),
-            LCZ=self.mm.subdivision[2] ** (self.R - 1)
-        )
-
-        self._direct_lib = lib.build.simple_lib_creator(header, source)['direct_interactions']
-
-
-
-
-
-
-
-
-
-
 
 
 

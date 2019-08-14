@@ -150,6 +150,8 @@ def test_free_space_3():
     
     MC.initialise()
 
+
+
     DFS = kmc_direct.FreeSpaceDirect()
 
     correct = DFS(N, A.P.view, A.Q.view)
