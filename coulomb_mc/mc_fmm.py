@@ -723,6 +723,7 @@ class MCFMM(MCCommon):
 
         energy += direct_contrib
 
+
         return energy
 
 
@@ -751,7 +752,6 @@ class MCFMM(MCCommon):
 
 
     def accept(self, move, energy_diff=None):
-        t0 = time.time()
         px = int(move[0])
         new_pos = move[1]
 
@@ -768,12 +768,13 @@ class MCFMM(MCCommon):
         q = float(self.charges[px, 0])
         
 
+        t0 = time.time()
         self.direct.accept(move)
+        self._profile_inc('direct_accept', time.time() - t0)       
 
         new_position = np.array((new_pos[0], new_pos[1], new_pos[2]), REAL)
         old_position = np.array((old_pos[0], old_pos[1], old_pos[2]), REAL)
 
-        self._profile_inc('direct_accept', time.time() - t0)       
 
         t0 = time.time()
         self._indirect_accept_lib(

@@ -167,7 +167,7 @@ class DirectCommon(MCCommon):
         new_pos = move[1]
         
         g = self.positions.group
-        old_cell = g._mc_fmm_cells[px, :].copy()
+        old_cell = self.dat_cells[px, :].copy()
         new_cell = self._get_cell(new_pos)
         
         # correct the cell to particle maps

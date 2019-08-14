@@ -48,6 +48,8 @@ class MCFMM_MM(MCCommon):
 
         self._init_libs()
 
+        self.tree = None
+
 
     def initialise(self):
         N = self.positions.npart_local
@@ -57,6 +59,7 @@ class MCFMM_MM(MCCommon):
 
         self.energy = self.mm(self.positions, self.charges)
         self.direct.initialise()
+        self.tree = self.mm.tree[:].copy()
 
 
     def propose(self, move):
@@ -66,30 +69,78 @@ class MCFMM_MM(MCCommon):
         old_energy = self._get_old_energy(px)
         new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
         self_energy = self._get_self_interaction(px, pos)
-        #print("M\t-->", old_energy, new_energy, self_energy)
+        # print("M\t-->", old_energy, new_energy, self_energy)
         return new_energy - old_energy - self_energy
 
     
     def accept(self, move, energy_diff=None):
-        t0 = time.time()
+        
+
         px = int(move[0])
         new_pos = move[1]
 
+        new_cell, mm_cells, mm_child_index = self._get_new_cells(new_pos)
+
+        g = self.positions.group
 
         if energy_diff is None:
             energy_diff = self.propose(move)
         
         self.energy += energy_diff
 
+        t0 = time.time()
+        self.direct.accept(move)
+        self._profile_inc('direct_accept', time.time() - t0)       
 
-
-    def _get_new_energy(self, ix, position, charge):
-
-
-        ie = REAL(0)
+        new_pos = np.array(
+            (new_pos[0], new_pos[1], new_pos[2]), 
+            REAL
+        )
         
-        position = np.array((position[0], position[1], position[2]), REAL)
-        charge = REAL(charge)
+        new_cell = np.array(
+            (new_cell[0], new_cell[1], new_cell[2]), 
+            INT64
+        )
+
+        self._indirect_accept_lib(
+            INT64(px),
+            self.mm.sh.get_pointer(self.positions(access.READ)),
+            self.mm.sh.get_pointer(self.charges(access.READ)),
+            self.mm.sh.get_pointer(self.group._mm_cells(access.READ)),
+            self.tree.ctypes.get_as_parameter(),
+            new_pos.ctypes.get_as_parameter(),
+            mm_cells.ctypes.get_as_parameter()
+        )
+
+
+        t0 = time.time()
+        assert self.comm.size == 1
+
+
+
+        # update the finest level cells
+        with self.group._mm_fine_cells.modify_view() as m:
+            m[px, :] = new_cell
+        
+        # update the cells on each level
+        with self.group._mm_cells.modify_view() as m:
+            m[px, :] = mm_cells.ravel()
+
+        # update the child indices on each level
+        with self.group._mm_child_index.modify_view() as m:
+            m[px, :] = mm_child_index.ravel()
+
+        
+        # move the particle in the dats
+        with self.positions.modify_view() as m:
+            m[px, :] = new_pos.copy()
+
+        self._profile_inc('dats_accept', time.time() - t0)
+        self._profile_inc('num_accept', 1)
+    
+
+
+    def _get_new_cells(self, position):
 
         mm_cells = np.zeros((self.R, 3), INT64)
         mm_child_index = np.zeros((self.R, 3), INT64)
@@ -126,6 +177,21 @@ class MCFMM_MM(MCCommon):
 
         new_cell = mm_cells[self.R-1, :].copy()
 
+        return new_cell, mm_cells, mm_child_index
+
+
+
+
+    def _get_new_energy(self, ix, position, charge):
+
+
+        ie = REAL(0)
+        
+        position = np.array((position[0], position[1], position[2]), REAL)
+        charge = REAL(charge)
+        
+        new_cell, mm_cells, mm_child_index = self._get_new_cells(position)
+
             
         self._indirect_lib(
             INT64(0),
@@ -134,17 +200,13 @@ class MCFMM_MM(MCCommon):
             self.mm.il_scalararray.ctypes_data,
             mm_cells.ctypes.get_as_parameter(),
             mm_child_index.ctypes.get_as_parameter(),
-            self.mm.tree.ctypes_data_access(access.READ),
-            self.mm.widths_x.ctypes_data,
-            self.mm.widths_y.ctypes_data,
-            self.mm.widths_z.ctypes_data,
-            self.mm.ncells_x.ctypes_data,
-            self.mm.ncells_y.ctypes_data,
-            self.mm.ncells_z.ctypes_data,
-            ctypes.byref(ie),
+            self.tree.ctypes.get_as_parameter(),
+            ctypes.byref(ie)
         )    
 
         direct_contrib = self.direct.get_new_energy(ix, position)
+
+
         return ie.value + direct_contrib
 
 
@@ -169,14 +231,8 @@ class MCFMM_MM(MCCommon):
             self.mm.il_scalararray.ctypes_data,
             self.mm.sh.get_pointer(self.group._mm_cells(access.READ)),
             self.mm.sh.get_pointer(self.group._mm_child_index(access.READ)),
-            self.mm.tree.ctypes_data_access(access.READ),
-            self.mm.widths_x.ctypes_data,
-            self.mm.widths_y.ctypes_data,
-            self.mm.widths_z.ctypes_data,
-            self.mm.ncells_x.ctypes_data,
-            self.mm.ncells_y.ctypes_data,
-            self.mm.ncells_z.ctypes_data,
-            ctypes.byref(ie),
+            self.tree.ctypes.get_as_parameter(),
+            ctypes.byref(ie)
         )
 
         direct_contrib = self.direct.get_old_energy(ix)
@@ -212,6 +268,27 @@ class MCFMM_MM(MCCommon):
             assign_gen += 'rhol *= iradius;\n'
 
 
+        widths_x = ','.join([str(ix) for ix in  self.mm.widths_x])
+        widths_y = ','.join([str(ix) for ix in  self.mm.widths_y])
+        widths_z = ','.join([str(ix) for ix in  self.mm.widths_z])
+        ncells_x = ','.join([str(ix) for ix in  self.mm.ncells_x])
+        ncells_y = ','.join([str(ix) for ix in  self.mm.ncells_y])
+        ncells_z = ','.join([str(ix) for ix in  self.mm.ncells_z])
+        
+        level_offsets = [0]
+        nx = 1
+        ny = 1
+        nz = 1
+        for level in range(1, self.R):
+            level_offsets.append(
+                level_offsets[-1] + nx * ny * nz * self.ncomp
+            )
+            nx *= self.mm.subdivision[0]
+            ny *= self.mm.subdivision[1]
+            nz *= self.mm.subdivision[2]
+
+        level_offsets = ','.join([str(ix) for ix in level_offsets])
+
 
         src = r'''
         
@@ -239,6 +316,16 @@ class MCFMM_MM(MCCommon):
         #define IM_OFFSET            {IM_OFFSET}
         #define THREE_R              {THREE_R}
 
+        const REAL WIDTHS_X[R] = {{ {WIDTHS_X} }};
+        const REAL WIDTHS_Y[R] = {{ {WIDTHS_Y} }};
+        const REAL WIDTHS_Z[R] = {{ {WIDTHS_Z} }};
+
+        const INT64 NCELLS_X[R] = {{ {NCELLS_X} }};
+        const INT64 NCELLS_Y[R] = {{ {NCELLS_Y} }};
+        const INT64 NCELLS_Z[R] = {{ {NCELLS_Z} }};
+
+        const INT64 LEVEL_OFFSETS[R] = {{ {LEVEL_OFFSETS} }};
+
 
         static inline void kernel(
             const REAL  * RESTRICT P,
@@ -247,12 +334,6 @@ class MCFMM_MM(MCCommon):
             const INT64 * RESTRICT MM_CELLS,
             const INT64 * RESTRICT MM_CHILD_INDEX,
             const REAL  * RESTRICT TREE,
-            const REAL  * RESTRICT WIDTHS_X,
-            const REAL  * RESTRICT WIDTHS_Y,
-            const REAL  * RESTRICT WIDTHS_Z,                            
-            const INT64 * RESTRICT NCELLS_X,
-            const INT64 * RESTRICT NCELLS_Y,
-            const INT64 * RESTRICT NCELLS_Z,                     
                   REAL  * RESTRICT OUT_ENERGY
         ){{
 
@@ -261,20 +342,6 @@ class MCFMM_MM(MCCommon):
             const double rz = P[2];
 
             double particle_energy = 0.0;
-
-            int64_t LEVEL_OFFSETS[R];
-            LEVEL_OFFSETS[0] = 0;
-            int64_t nx = 1;
-            int64_t ny = 1;
-            int64_t nz = 1;
-            for(int level=1 ; level<R ; level++ ){{
-                int64_t nprev = nx * ny * nz * NCOMP;
-                LEVEL_OFFSETS[level] = LEVEL_OFFSETS[level - 1] + nprev;
-                nx *= SDX;
-                ny *= SDY;
-                nz *= SDZ;
-            }}
-
 
             for( int level=0 ; level<R ; level++ ){{
 
@@ -356,12 +423,6 @@ class MCFMM_MM(MCCommon):
             const INT64 * RESTRICT MM_CELLS,
             const INT64 * RESTRICT MM_CHILD_INDEX,
             const REAL  * RESTRICT TREE,
-            const REAL  * RESTRICT WIDTHS_X,
-            const REAL  * RESTRICT WIDTHS_Y,
-            const REAL  * RESTRICT WIDTHS_Z,                            
-            const INT64 * RESTRICT NCELLS_X,
-            const INT64 * RESTRICT NCELLS_Y,
-            const INT64 * RESTRICT NCELLS_Z,                     
                   REAL  * RESTRICT OUT_ENERGY       
         ){{
             
@@ -373,12 +434,6 @@ class MCFMM_MM(MCCommon):
                 &MM_CELLS[IX*THREE_R],
                 &MM_CHILD_INDEX[IX*THREE_R],
                 TREE,
-                WIDTHS_X,
-                WIDTHS_Y,
-                WIDTHS_Z,                            
-                NCELLS_X,
-                NCELLS_Y,
-                NCELLS_Z,                     
                 OUT_ENERGY
             );
 
@@ -410,10 +465,36 @@ class MCFMM_MM(MCCommon):
             IL_STRIDE_OUTER=self.mm.il_array.shape[1] * self.mm.il_array.shape[2],
             NCOMP=self.ncomp,
             IM_OFFSET=self.L**2,
-            THREE_R=self.R*3
+            THREE_R=self.R*3,
+            WIDTHS_X=widths_x,
+            WIDTHS_Y=widths_y,
+            WIDTHS_Z=widths_z,
+            NCELLS_X=ncells_x,
+            NCELLS_Y=ncells_y,
+            NCELLS_Z=ncells_z,
+            LEVEL_OFFSETS=level_offsets            
         )
 
         self._indirect_lib = lib.build.simple_lib_creator('#include <math.h>', src)['get_energy']
+        
+
+        # =============================================================================================================
+
+
+        assign_gen =  'double rhol = 1.0;\n'
+        assign_gen += 'double rholcharge = rhol * charge;\n'
+        for lx in range(self.L):
+            for mx in range(-lx, lx+1):
+                assign_gen += 'TREE[OFFSET + {ind}] += {ylmm} * rholcharge;\n'.format(
+                        ind=cube_ind(lx, mx),
+                        ylmm=str(sph_gen.get_y_sym(lx, -mx)[0])
+                    )
+                assign_gen += 'TREE[OFFSET + IM_OFFSET + {ind}] += {ylmm} * rholcharge;\n'.format(
+                        ind=cube_ind(lx, mx),
+                        ylmm=str(sph_gen.get_y_sym(lx, -mx)[1])
+                    )
+            assign_gen += 'rhol *= radius;\n'
+            assign_gen += 'rholcharge = rhol * charge;\n'
 
 
 
@@ -422,12 +503,149 @@ class MCFMM_MM(MCCommon):
 
 
 
+        src = r'''
+        
+        #define REAL double
+        #define INT64 int64_t
+        #define R                    {R}
+        #define EX                   {EX}
+        #define EY                   {EY}
+        #define EZ                   {EZ}
+        #define HEX                  {HEX}
+        #define HEY                  {HEY}
+        #define HEZ                  {HEZ}
+        #define CWX                  {CWX}
+        #define CWY                  {CWY}
+        #define CWZ                  {CWZ}
+        #define LCX                  {LCX}
+        #define LCY                  {LCY}
+        #define LCZ                  {LCZ}
+        #define SDX                  {SDX}
+        #define SDY                  {SDY}
+        #define SDZ                  {SDZ}
+        #define IL_NO                {IL_NO}
+        #define IL_STRIDE_OUTER      {IL_STRIDE_OUTER}
+        #define NCOMP                {NCOMP}
+        #define IM_OFFSET            {IM_OFFSET}
+        #define THREE_R              {THREE_R}
+
+        const REAL WIDTHS_X[R] = {{ {WIDTHS_X} }};
+        const REAL WIDTHS_Y[R] = {{ {WIDTHS_Y} }};
+        const REAL WIDTHS_Z[R] = {{ {WIDTHS_Z} }};
+
+        const INT64 NCELLS_X[R] = {{ {NCELLS_X} }};
+        const INT64 NCELLS_Y[R] = {{ {NCELLS_Y} }};
+        const INT64 NCELLS_Z[R] = {{ {NCELLS_Z} }};
+
+        const INT64 LEVEL_OFFSETS[R] = {{ {LEVEL_OFFSETS} }};
+
+
+        static inline void kernel(
+            const REAL  * RESTRICT P,
+            const REAL  * RESTRICT Q,
+            const INT64 * RESTRICT MM_CELLS,
+                  REAL  * RESTRICT TREE
+        ){{
+
+            const double rx = P[0];
+            const double ry = P[1];
+            const double rz = P[2];
+
+
+            for( int level=R-1 ; level>=0 ; level-- ){{
+
+                const INT64 cellx = MM_CELLS[level*3 + 0];
+                const INT64 celly = MM_CELLS[level*3 + 1];
+                const INT64 cellz = MM_CELLS[level*3 + 2];
+
+
+                const double dx = rx - ((-HEX) + (0.5  + cellx) * WIDTHS_X[level]);
+                const double dy = ry - ((-HEY) + (0.5  + celly) * WIDTHS_Y[level]);
+                const double dz = rz - ((-HEZ) + (0.5  + cellz) * WIDTHS_Z[level]);
+
+                const double xy2 = dx * dx + dy * dy;
+                const double radius = sqrt(xy2 + dz * dz);
+                const double theta = atan2(sqrt(xy2), dz);
+                const double phi = atan2(dy, dx);
+                const double charge = Q[0];
+                
+                const int64_t lin_ind = cellx + NCELLS_X[level] * (celly + NCELLS_Y[level] * cellz);
+                const int64_t OFFSET = LEVEL_OFFSETS[level] + NCOMP * lin_ind;
+
+                {SPH_GEN}
+                {ASSIGN_GEN}
+
+            }}
+
+            
+        }}
 
 
 
+        extern "C" int indirect_accept(
+            const INT64            IX,
+            const REAL  * RESTRICT P,
+            const REAL  * RESTRICT Q,
+            const INT64 * RESTRICT MM_CELLS,
+                  REAL  * RESTRICT TREE,
+            const REAL  * RESTRICT NEW_P,
+            const INT64 * RESTRICT NEW_MM_CELLS
+        ){{
+            
+            // remove the old contrib
 
+            const REAL tmp_q = -1.0 * Q[IX];
+            kernel(
+                &P[IX*3],
+                &tmp_q,
+                &MM_CELLS[IX*THREE_R],
+                TREE
+            );
 
+            
+            // add the new contrib
+            kernel(
+                NEW_P,
+                &Q[IX],
+                NEW_MM_CELLS,
+                TREE
+            );
 
+                
+            return 0;
+        }}
 
+        '''.format(
+            SPH_GEN=str(sph_gen.module),
+            ASSIGN_GEN=str(assign_gen),
+            R=self.R,
+            EX=extent[0],
+            EY=extent[1],
+            EZ=extent[2],
+            HEX=0.5 * extent[0],
+            HEY=0.5 * extent[1],
+            HEZ=0.5 * extent[2],                
+            CWX=cell_widths[0],
+            CWY=cell_widths[1],
+            CWZ=cell_widths[2],
+            LCX=self.mm.subdivision[0] ** (self.R - 1),
+            LCY=self.mm.subdivision[1] ** (self.R - 1),
+            LCZ=self.mm.subdivision[2] ** (self.R - 1),
+            SDX=self.mm.subdivision[0],
+            SDY=self.mm.subdivision[1],
+            SDZ=self.mm.subdivision[2],
+            IL_NO=self.mm.il_array.shape[1],
+            IL_STRIDE_OUTER=self.mm.il_array.shape[1] * self.mm.il_array.shape[2],
+            NCOMP=self.ncomp,
+            IM_OFFSET=self.L**2,
+            THREE_R=self.R*3,
+            WIDTHS_X=widths_x,
+            WIDTHS_Y=widths_y,
+            WIDTHS_Z=widths_z,
+            NCELLS_X=ncells_x,
+            NCELLS_Y=ncells_y,
+            NCELLS_Z=ncells_z,
+            LEVEL_OFFSETS=level_offsets
+        )
 
-
+        self._indirect_accept_lib = lib.build.simple_lib_creator('#include <math.h>', src)['indirect_accept']
