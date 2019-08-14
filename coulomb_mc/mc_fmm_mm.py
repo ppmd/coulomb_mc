@@ -57,6 +57,25 @@ class MCFMM_MM:
         return new_energy - old_energy - self_energy
 
     
+    def accept(self, move, energy_diff=None):
+        t0 = time.time()
+        px = int(move[0])
+        new_pos = move[1]
+
+
+        if energy_diff is None:
+            energy_diff = self.propose(move)
+        
+        self.energy += energy_diff
+
+
+
+
+
+
+
+
+
     def _get_new_energy(self, position, charge):
 
 

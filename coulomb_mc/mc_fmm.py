@@ -8,6 +8,9 @@ import ctypes
 import math
 
 from coulomb_mc import mc_expansion_tools
+from coulomb_mc.mc_direct import DirectCommon
+from coulomb_mc.mc_common import MCCommon
+
 
 import time
 
@@ -19,7 +22,7 @@ PROFILE = opt.PROFILE
 
 
 
-class MCFMM:
+class MCFMM(MCCommon):
 
     def __init__(self, positions, charges, domain, boundary_condition, r, l):
 
@@ -51,20 +54,11 @@ class MCFMM:
         for rx in range(self.R):
             t += self.tree_local.num_data[rx]
             self.tree_local_ga_offsets[rx + 1] = t
-    
- 
+        
         s = self.subdivision
         s = [sx ** (self.R - 1) for sx in s]
         ncells_finest = s[0] * s[1] * s[2]
         self.cell_occupation_ga = data.GlobalArray(ncomp=ncells_finest, dtype=INT64)
-        self.cell_occupation = None
-        self.cell_indices = np.zeros((s[2], s[1], s[0], 10), INT64)
-        self.max_occupancy = None
-
-        self.direct_map = {}
-        self._direct_contrib_lib = None
-        self._init_direct_contrib_lib()
-
 
         
         # interaction lists
@@ -75,7 +69,6 @@ class MCFMM:
         self.il_scalararray = data.ScalarArray(ncomp=self.il_array.size, dtype=INT64)
         self.il_scalararray[:] = self.il_array.ravel().copy()
 
-        self.il_earray = np.array(self.il[1], INT64)
         
         # expansion tools
         self.lee = kmc_expansion_tools.LocalExpEval(self.L)
@@ -120,6 +113,7 @@ class MCFMM:
         self.dat_size = tmp
 
 
+        self.direct = DirectCommon(positions, charges, domain, boundary_condition, r, self.subdivision, g._mc_fmm_cells, g._mc_ids)
 
         self.energy = None
 
@@ -676,132 +670,25 @@ class MCFMM:
         self._cell_bin_format_lib = lib.build.simple_lib_creator(header, source)['bookkeeping_entry']
 
     
-
     
-
-
-
-    
-
-    def _get_cell(self, position):
-
-        extent = self.domain.extent
-        cell_widths = [ex / (2**(self.R - 1)) for ex in extent]
-        spos = [0.5*ex + po for po, ex in zip(position, extent)]
-        
-        # if a charge is slightly out of the negative end of an axis this will
-        # truncate to zero
-        cell = [int(pcx / cwx) for pcx, cwx in zip(spos, cell_widths)]
-        # truncate down if too high on axis, if way too high this should 
-        # probably throw an error
-        cc = tuple([min(cx, (2**(self.R -1))-1) for cx in cell ])
-        return cc
-
-
-    def _get_cell_disp(self, cell, position, level):
-        """
-        Returns spherical coordinate of particle with local cell centre as an
-        origin
-        """
-        extent = self.domain.extent
-        sl = 2 ** level
-        csl = [extent[0] / sl,
-               extent[1] / sl,
-               extent[2] / sl]
-        
-        es = [extent[0] * -0.5,
-              extent[1] * -0.5,
-              extent[2] * -0.5]
-
-        ec = [esx + 0.5 * cx + ccx * cx for esx, cx, ccx in zip(es, csl, cell)]
-        
-        disp = (position[0] - ec[0], position[1] - ec[1], position[2] - ec[2])
-        sph = common.spherical(disp)
-        
-        return sph
- 
-
-    def _get_parent(self, cell, level):
-        """
-        Return the index of the parent of a cell on a level
-        """
-        c = 2**(self.R - level - 1)
-        return (
-            int(cell[0]) // c,
-            int(cell[1]) // c,
-            int(cell[2]) // c
-        )
-
-
-    def _get_child_index(self, cell):
-
-        return (int(cell[0]) % 2) + 2 * ((int(cell[1]) % 2) + 2 * (int(cell[2]) % 2))
-
-
     def _setup_tree(self):
-        
-        for levelx in range(self.R):
-            self.tree_local[levelx][:] = 0
-
-        g = self.positions.group
-        N = self.positions.npart_local
-
-        start_ptrs = np.zeros(self.R, ctypes.c_void_p)
-        for rx in range(self.R):
-            start_ptrs[rx] = self.tree_local[rx].ctypes.get_as_parameter().value
 
         self._cell_bin_loop.execute()
         self._profile_inc('_cell_bin_wrapper', self._cell_bin_loop.wrapper_timer.time())
-
-        self.max_occupancy = np.max(self.cell_occupation_ga[:])
-        s = self.subdivision
-        s = [sx ** (self.R - 1) for sx in s]
-        self.cell_occupation = self.cell_occupation_ga[:].copy().reshape((s[2], s[1], s[0]))
-
 
         for rx in range(self.R):
             
             s = self.tree_local_ga_offsets[rx]
             e = self.tree_local_ga_offsets[rx+1]
-            # err = np.linalg.norm(self.tree_local_ga[s:e:] - self.tree_local[rx].ravel())
-            # print(rx, err)
             self.tree_local[rx].ravel()[:] = self.tree_local_ga[s:e:].copy()
-
-
 
     
     def _compute_energy(self):
-
-        N = self.positions.npart_local
-        g = self.positions.group
-
-
-        C = g._mc_fmm_cells
+        
 
         energy = 0.0
-        
-        self.direct_map = {}
-        # indirect part ( and bin into cells)
-        for px in range(N):
-
-            # cell on finest level
-            cell = tuple(C[px, :])
-
-            if cell in self.direct_map.keys():
-                self.direct_map[cell].append(px)
-            else:
-                self.direct_map[cell] = [px]
-
-        self._make_occupancy_map()
-
-        
-        with g._mc_ids.modify_view() as mv:
-            mv[:, 0] = np.arange(N)
-
-
-        # indirect part 
         energy_py = 0.0
-        for px in range(N):
+        for px in range(self.group.npart_local):
             tmp = self._get_old_energy(px)
             energy_py += tmp
 
@@ -812,13 +699,9 @@ class MCFMM:
 
     def _get_old_energy(self, px):
 
-        tmp = np.zeros(self.ncomp, REAL)
-        N = self.positions.npart_local
         g = self.positions.group
         C = g._mc_fmm_cells
-        R = self.R
 
-        sl = 2**(self.R - 1)
         energy = 0.0
 
         pos = self.positions[px,:].copy()
@@ -827,26 +710,6 @@ class MCFMM:
 
         # cell on finest level
         cell = (C[px, 0], C[px, 1], C[px, 2])
-        
-        #radius = np.zeros(R, REAL)
-        #theta = np.zeros(R, REAL)
-        #phi = np.zeros(R, REAL)
-        #moments = np.zeros(R, ctypes.c_void_p)
-        #out = np.zeros(R, REAL)
-        #
-
-        #for level in range(self.R):
-        #    
-        #    cell_level = self._get_parent(cell, level)
-        #    sph = self._get_cell_disp(cell_level, pos, level)
-
-        #    radius[level] = sph[0]
-        #    theta[level] = sph[1]
-        #    phi[level] = sph[2]
-        #    moments[level] = self.tree_local[level][cell_level[2], cell_level[1], cell_level[0], :].ctypes.get_as_parameter().value
-        #
-        #self.mc_lee.compute_phi_local(R, radius, theta, phi, moments, out)
-        # energy += np.sum(out) * charge
         
         t0 = time.time()
         energy_c = REAL(0)
@@ -862,74 +725,18 @@ class MCFMM:
         energy += energy_c.value
         self._profile_inc('indirect_old', time.time() - t0)
 
-
-        energy_pc = REAL()
-        index_c = INT64(px)
-        
-        t0 = time.time()
-        self._direct_contrib_lib(
-            INT64(0),                         #// -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
-            INT64(1),                          #//number of contributions to compute
-            INT64(self.il_earray.shape[0]),
-            INT64(self.cell_indices.shape[3]),
-            ctypes.byref(index_c),
-            g._mc_ids.view.ctypes.get_as_parameter(),
-            self.positions.view.ctypes.get_as_parameter(),
-            self.charges.view.ctypes.get_as_parameter(),
-            g._mc_fmm_cells.view.ctypes.get_as_parameter(),
-            self.cell_occupation.ctypes.get_as_parameter(),
-            self.cell_indices.ctypes.get_as_parameter(),
-            self.il_earray.ctypes.get_as_parameter(),
-            ctypes.byref(REAL()),
-            ctypes.byref(INT64()),
-            ctypes.byref(energy_pc)
-        )
-        energy_c = energy_pc.value
-        energy += energy_c
-        self._profile_inc('direct_old', time.time() - t0)
-
-        #energy_py = 0.0
-        #for ox in self.il[1]:
-
-        #    ccc = (
-        #        cell[0] + ox[0],
-        #        cell[1] + ox[1],
-        #        cell[2] + ox[2],
-        #    )
-        #    if ccc[0] < 0: continue
-        #    if ccc[1] < 0: continue
-        #    if ccc[2] < 0: continue
-        #    if ccc[0] >= sl: continue
-        #    if ccc[1] >= sl: continue
-        #    if ccc[2] >= sl: continue
-
-        #    ccc = tuple(ccc)
-        #    if ccc not in self.direct_map: continue
-
-        #    for jx in self.direct_map[ccc]:
-        #        if jx == px: continue
-
-        #        energy_py += charge * self.charges[jx, 0] / np.linalg.norm(pos - self.positions[jx, :])
-        #energy += energy_py
+        direct_contrib = self.direct.get_old_energy(px)
+        energy += direct_contrib
 
         return energy
 
 
     def _get_new_energy(self, px, pos):
 
-        tmp = np.zeros(self.ncomp, REAL)
-        N = self.positions.npart_local
-        g = self.positions.group
-        R = self.R       
-        sl = 2**(self.R - 1)
         energy = 0.0
-
         charge = float(self.charges[px, 0])
 
-        # cell on finest level
         cell = self._get_cell(pos)
-
-
 
         t0 = time.time()
         energy_c = REAL(0)
@@ -945,50 +752,21 @@ class MCFMM:
         energy += energy_c.value
         self._profile_inc('indirect_new', time.time() - t0)
 
-        #print("LIN", energy)
+        direct_contrib = self.direct.get_new_energy(px, pos)
 
-
-        t0 = time.time()
-        energy_pc = REAL(0)
-        index_c = INT64(px)
-        tpos = np.array((pos[0], pos[1], pos[2]), REAL)
-        tcell = np.array(cell, INT64)
-        self._direct_contrib_lib(
-            INT64(1),                         #// -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
-            INT64(1),                          #//number of contributions to compute
-            INT64(self.il_earray.shape[0]),
-            INT64(self.cell_indices.shape[3]),
-            ctypes.byref(index_c),
-            g._mc_ids.view.ctypes.get_as_parameter(),
-            self.positions.view.ctypes.get_as_parameter(),
-            self.charges.view.ctypes.get_as_parameter(),
-            g._mc_fmm_cells.view.ctypes.get_as_parameter(),
-            self.cell_occupation.ctypes.get_as_parameter(),
-            self.cell_indices.ctypes.get_as_parameter(),
-            self.il_earray.ctypes.get_as_parameter(),
-            tpos.ctypes.get_as_parameter(),
-            tcell.ctypes.get_as_parameter(),
-            ctypes.byref(energy_pc)
-        )
-        energy_c = energy_pc.value
-        energy += energy_c
-        self._profile_inc('direct_new', time.time() - t0)
-
-        #print("LDN", energy_c)
+        energy += direct_contrib
 
         return energy
-    
-
-    def _get_self_interaction(self, px, pos):
-
-        charge = self.charges[px, 0]
-        old_pos = self.positions[px, :]
-
-        return charge * charge / np.linalg.norm(old_pos.ravel() - pos.ravel())
 
 
     def initialise(self):
+        N = self.positions.npart_local
+        g = self.positions.group
+        with g._mc_ids.modify_view() as mv:
+            mv[:, 0] = np.arange(N)
+
         self._setup_tree()
+        self.direct.initialise()
         self.energy = self._compute_energy()
 
     
@@ -1005,25 +783,13 @@ class MCFMM:
         return  new_energy - old_energy - self_energy
 
 
-    def _make_occupancy_map(self):
-        s = self.subdivision
-        s = [sx ** (self.R - 1) for sx in s]
-        if self.cell_indices.shape[3] < self.max_occupancy:
-            self.cell_indices = np.zeros((s[2], s[1], s[0], self.max_occupancy), INT64)
-        
-        for cellx in self.direct_map.keys():
-            l = len(self.direct_map[cellx])
-            self.cell_indices[cellx[2], cellx[1], cellx[0], :l] = self.direct_map[cellx]
-
-
-
-
-
     def accept(self, move, energy_diff=None):
         t0 = time.time()
         px = int(move[0])
         new_pos = move[1]
 
+        new_cell = self._get_cell(new_pos)
+        g = self.positions.group
 
         if energy_diff is None:
             energy_diff = self.propose(move)
@@ -1034,40 +800,9 @@ class MCFMM:
         old_pos = self.positions[px, :].copy()
         q = float(self.charges[px, 0])
         
-        g = self.positions.group
-        old_cell = g._mc_fmm_cells[px, :].copy()
-        new_cell = self._get_cell(new_pos)
-        
-        # correct the cell to particle maps
-        self.direct_map[(old_cell[0], old_cell[1], old_cell[2])].remove(px)
-        assert px not in self.direct_map[(old_cell[0], old_cell[1], old_cell[2])]
 
-        tnew = (new_cell[0], new_cell[1], new_cell[2])
-        told = (old_cell[0], old_cell[1], old_cell[2])
+        self.direct.accept(move)
 
-        if tnew in self.direct_map.keys():
-            self.direct_map[tnew].append(px)
-        else:
-            self.direct_map[tnew] = [px]
-        
-        possible_new_max = len(self.direct_map[tnew])
-        ol = len(self.direct_map[told])
-
-
-        if possible_new_max > self.max_occupancy:
-            # need to remake the map
-            self.max_occupancy = possible_new_max
-            self._make_occupancy_map()
-        else:
-            # add the new one
-            self.cell_indices[tnew[2], tnew[1], tnew[0], :possible_new_max] = self.direct_map[tnew]
-            # remove the old one
-            self.cell_indices[told[2], told[1], told[0], :ol] = self.direct_map[told]
-
-
-        self.cell_occupation[tnew[2], tnew[1], tnew[0]] = possible_new_max
-        self.cell_occupation[told[2], told[1], told[0]] = ol
-        
         new_position = np.array((new_pos[0], new_pos[1], new_pos[2]), REAL)
         old_position = np.array((old_pos[0], old_pos[1], old_pos[2]), REAL)
 
@@ -1083,88 +818,6 @@ class MCFMM:
         )
         self._profile_inc('indirect_accept', time.time() - t0)
 
-        ### to pass into lib
-        #charge = np.zeros(self.il_max_len * self.R, REAL)
-        #radius = np.zeros_like(charge)
-        #theta = np.zeros_like(charge)
-        #phi = np.zeros_like(charge)
-        #ptrs = np.zeros(self.il_max_len * self.R, ctypes.c_void_p)
-
-        #n = 0
-        ## remove old contrib
-        #for level in range(self.R):
-        #    
-        #    # cell on level 
-        #    cell_level = self._get_parent(old_cell, level)
-        #    child_index = self._get_child_index(cell_level)
-
-        #    il = self.il[0][child_index]
-
-        #    for ox in il:
-        #        ccc = (
-        #            cell_level[0] + ox[0], 
-        #            cell_level[1] + ox[1], 
-        #            cell_level[2] + ox[2], 
-        #        )
-
-        #        # test if outside domain
-        #        sl = 2**level
-        #        if ccc[0] < 0: continue
-        #        if ccc[1] < 0: continue
-        #        if ccc[2] < 0: continue
-        #        if ccc[0] >= sl: continue
-        #        if ccc[1] >= sl: continue
-        #        if ccc[2] >= sl: continue
-
-        #        sph = self._get_cell_disp(ccc, old_pos, level)
-        #        #self.lee.local_exp(sph, -q, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
-
-        #        charge[n] = -q
-        #        radius[n] = sph[0]
-        #        theta[n] = sph[1]
-        #        phi[n] = sph[2]
-        #        ptrs[n] = self.tree_local[level][ccc[2], ccc[1], ccc[0], :].ctypes.get_as_parameter().value
-        #        n += 1
-
-        #self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
-
-        #n = 0
-        ## add new contrib
-        #for level in range(self.R):
-        #    
-        #    # cell on level 
-        #    cell_level = self._get_parent(new_cell, level)
-        #    child_index = self._get_child_index(cell_level)
-
-        #    il = self.il[0][child_index]
-
-        #    for ox in il:
-        #        ccc = (
-        #            cell_level[0] + ox[0], 
-        #            cell_level[1] + ox[1], 
-        #            cell_level[2] + ox[2], 
-        #        )
-
-        #        # test if outside domain
-        #        sl = 2**level
-        #        if ccc[0] < 0: continue
-        #        if ccc[1] < 0: continue
-        #        if ccc[2] < 0: continue
-        #        if ccc[0] >= sl: continue
-        #        if ccc[1] >= sl: continue
-        #        if ccc[2] >= sl: continue
-
-        #        sph = self._get_cell_disp(ccc, new_pos, level)
-        #        #self.lee.local_exp(sph, q, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
-
-        #        charge[n] = q
-        #        radius[n] = sph[0]
-        #        theta[n] = sph[1]
-        #        phi[n] = sph[2]
-        #        ptrs[n] = self.tree_local[level][ccc[2], ccc[1], ccc[0], :].ctypes.get_as_parameter().value
-        #        n += 1
-
-        #self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
 
 
         t0 = time.time()
@@ -1180,171 +833,5 @@ class MCFMM:
         self._profile_inc('dats_accept', time.time() - t0)
         self._profile_inc('num_accept', 1)
 
-
-
-    def _profile_inc(self, key, inc):
-        key = self.__class__.__name__ + ':' + key
-        if key not in PROFILE.keys():
-            PROFILE[key] = inc
-        else:
-            PROFILE[key] += inc
-
-    def _profile_get(self, key):
-        key = self.__class__.__name__ + ':' + key
-        return PROFILE[key]
-
-    def _profile_set(self, key, inc):
-        key = self.__class__.__name__ + ':' + key
-        if key not in PROFILE.keys():
-            PROFILE[key] = inc
-        else:
-            PROFILE[key] = inc 
-
-
-
-
- 
-    def _init_direct_contrib_lib(self):
-
-        source = r'''
-
-        extern "C" int direct_entry(
-            const INT64 MODE,                   // -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
-            const INT64 n,                      //number of contributions to compute
-            const INT64 noffsets,               //number of nearest neighbour cells
-            const INT64 occ_stride,
-            const INT64 * RESTRICT I,           //ids to compute (might be null)
-            const INT64 * RESTRICT IDS,         //particle ids
-            const REAL * RESTRICT P,            //positions
-            const REAL * RESTRICT Q,            //charges
-            const INT64 * RESTRICT CELLS,       //particle cells
-            const INT64 * RESTRICT OCC,         //cell occupancies
-            const INT64 * RESTRICT MAP,         //map from cells to particle ids (local ids)
-            const INT64 * RESTRICT NNMAP,       //nearest neighbour offsets
-            const REAL * RESTRICT NEW_POS,      //new position if MODE == 1
-            const INT64 * RESTRICT NEW_CELL,    //new cells if MODE == 1
-            REAL * RESTRICT U                   //output energy array
-        ){{
-            
-            REAL UTOTAL = 0.0;
-
-            #pragma omp parallel for reduction(+: UTOTAL) if((n>1))
-            for(INT64 px=0 ; px<n ; px++){{
-                
-                INT64 ix1;
-                if (MODE < 0) {{
-                    ix1 = px;
-                }} else {{
-                    ix1 = I[px];
-                }}
-
-
-                const INT64 ix = ix1;
-                REAL UTMP = 0.0;
- 
-                REAL rpx = P[ix * 3 + 0];
-                REAL rpy = P[ix * 3 + 1];
-                REAL rpz = P[ix * 3 + 2];
-
-                if (MODE == 1){{
-                    rpx = NEW_POS[px * 3 + 0];
-                    rpy = NEW_POS[px * 3 + 1];
-                    rpz = NEW_POS[px * 3 + 2];
-                }}
-
-
-                const REAL rx = rpx;
-                const REAL ry = rpy;
-                const REAL rz = rpz;
-
-                INT64 CIX = CELLS[ix * 3 + 0];
-                INT64 CIY = CELLS[ix * 3 + 1];
-                INT64 CIZ = CELLS[ix * 3 + 2];
-
-                if (MODE == 1){{
-                    CIX = NEW_CELL[px * 3 + 0];
-                    CIY = NEW_CELL[px * 3 + 1];
-                    CIZ = NEW_CELL[px * 3 + 2];
-                }}
-
-
-
-                const REAL qi = Q[ix];
-                const INT64 idi = IDS[ix];
-                
-                //for each offset
-
-
-                //#pragma omp parallel for reduction(+: UTMP) if((n==1)) schedule(static,1)
-                for(INT64 ox=0 ; ox<noffsets ; ox++){{
-                    
-                    const INT64 ocx = CIX + NNMAP[ox * 3 + 0];
-                    const INT64 ocy = CIY + NNMAP[ox * 3 + 1];
-                    const INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
-
-                    if (ocx < 0) {{continue;}}
-                    if (ocy < 0) {{continue;}}
-                    if (ocz < 0) {{continue;}}
-                    if (ocx >= LCX) {{continue;}}
-                    if (ocy >= LCY) {{continue;}}
-                    if (ocz >= LCZ) {{continue;}}
-
-                    // for each particle in the cell
-                    
-                    const INT64 cj = ocx + LCX * (ocy + LCY * ocz);
-                    for(INT64 jxi=0 ; jxi<OCC[cj] ; jxi++){{
-
-                        const INT64 jx = MAP[occ_stride * cj + jxi];
-
-                        const REAL rjx = P[jx * 3 + 0];
-                        const REAL rjy = P[jx * 3 + 1];
-                        const REAL rjz = P[jx * 3 + 2];
-                        const REAL qj = Q[jx];
-                        const INT64 idj = IDS[jx];
-
-                        const REAL dx = rx - rjx;
-                        const REAL dy = ry - rjy;
-                        const REAL dz = rz - rjz;
-
-                        const REAL r2 = dx*dx + dy*dy + dz*dz;
-
-                        const bool same_id = (MODE > 0) || ( (MODE < 1) && (idi != idj) );
-                        UTMP += (same_id) ? qj / sqrt(r2) : 0.0;
-                    
-                    }}
-                }}
-
-                    
-                if (MODE != -1) {{
-                    U[px] = UTMP * qi;
-                }} else {{
-                    UTOTAL += UTMP * qi;
-                }}
-            }}
-
-            if (MODE == -1){{
-                U[0] = UTOTAL;
-            }}
-
-            return 0;
-        }}
-        '''.format(
-        )
-
-        header = r'''
-        #include <math.h>
-        #include <stdio.h>
-        #define REAL double
-        #define INT64 int64_t
-        #define LCX {LCX}
-        #define LCY {LCY}
-        #define LCZ {LCZ}
-        '''.format(
-            LCX=self.subdivision[0] ** (self.R - 1),
-            LCY=self.subdivision[1] ** (self.R - 1),
-            LCZ=self.subdivision[2] ** (self.R - 1)
-        )
-
-        self._direct_contrib_lib = lib.build.simple_lib_creator(header, source)['direct_entry']
 
 
