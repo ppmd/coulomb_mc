@@ -58,6 +58,70 @@ class MCFMM_MM:
         old_energy = self._get_old_energy(px)
         print(old_energy)
 
+    
+    def _get_new_energy(self, position, charge):
+
+
+        ie = REAL(0)
+        
+        position = np.array((position[0], position[1], position[2]), REAL)
+        charge = REAL(charge)
+
+        mm_cells = np.zeros((self.R, 3), INT64)
+        mm_child_index = np.zeros((self.R, 3), INT64)
+
+        e = self.domain.extent
+
+        sr0 = position[0] + 0.5 * e[0]
+        sr1 = position[1] + 0.5 * e[1]
+        sr2 = position[2] + 0.5 * e[2]
+        cell_widths = [1.0 / (ex / (sx**(self.R - 1))) for ex, sx in zip(e, self.mm.subdivision)]
+        c0 = int(sr0 * cell_widths[0])
+        c1 = int(sr1 * cell_widths[1])
+        c2 = int(sr2 * cell_widths[2])
+        sd0 = self.mm.subdivision[0]
+        sd1 = self.mm.subdivision[1]
+        sd2 = self.mm.subdivision[2]
+        sl0 = sd0 ** (self.R-1)
+        sl1 = sd1 ** (self.R-1)
+        sl2 = sd2 ** (self.R-1)
+        c0 = 0 if c0 < 0 else ((sl0-1) if c0 >= sl0 else c0)
+        c1 = 0 if c1 < 0 else ((sl1-1) if c1 >= sl1 else c1)
+        c2 = 0 if c2 < 0 else ((sl2-1) if c2 >= sl2 else c2)
+
+        for rx in range(self.R-1, -1, -1):
+            mm_cells[rx, :] = (c0, c1, c2)
+            mm_child_index[rx, :] = (
+                c0 % sl0,
+                c1 % sl1,
+                c2 % sl2
+            )
+            c0 //= sd0
+            c1 //= sd1
+            c2 //= sd2
+
+            
+        self._indirect_lib(
+            INT64(0),
+            position.ctypes.get_as_parameter(),
+            ctypes.byref(charge),
+            self.mm.il_scalararray.ctypes_data,
+            mm_cells.ctypes.get_as_parameter(),
+            mm_child_index.ctypes.get_as_parameter(),
+            self.mm.tree.ctypes_data_access(access.READ),
+            self.mm.widths_x.ctypes_data,
+            self.mm.widths_y.ctypes_data,
+            self.mm.widths_z.ctypes_data,
+            self.mm.ncells_x.ctypes_data,
+            self.mm.ncells_y.ctypes_data,
+            self.mm.ncells_z.ctypes_data,
+            ctypes.byref(ie),
+        )    
+
+
+
+
+
 
 
 
@@ -68,7 +132,7 @@ class MCFMM_MM:
         
         ie = REAL(0)
             
-        self._old_indirect_lib(
+        self._indirect_lib(
             INT64(ix),
             self.mm.sh.get_pointer(self.positions(access.READ)),
             self.mm.sh.get_pointer(self.charges(access.READ)),
@@ -335,7 +399,7 @@ class MCFMM_MM:
             THREE_R=self.R*3
         )
 
-        self._old_indirect_lib = lib.build.simple_lib_creator('#include <math.h>', src)['get_energy']
+        self._indirect_lib = lib.build.simple_lib_creator('#include <math.h>', src)['get_energy']
 
 
 

@@ -8,6 +8,7 @@ import ctypes
 import math
 
 from coulomb_mc import mc_expansion_tools
+
 import time
 
 Constant = kernel.Constant
@@ -15,6 +16,8 @@ REAL = ctypes.c_double
 INT64 = ctypes.c_int64
 
 PROFILE = opt.PROFILE
+
+
 
 class MCFMM:
 
@@ -49,7 +52,20 @@ class MCFMM:
             t += self.tree_local.num_data[rx]
             self.tree_local_ga_offsets[rx + 1] = t
     
-        
+ 
+        s = self.subdivision
+        s = [sx ** (self.R - 1) for sx in s]
+        ncells_finest = s[0] * s[1] * s[2]
+        self.cell_occupation_ga = data.GlobalArray(ncomp=ncells_finest, dtype=INT64)
+        self.cell_occupation = None
+        self.cell_indices = np.zeros((s[2], s[1], s[0], 10), INT64)
+        self.max_occupancy = None
+
+        self.direct_map = {}
+        self._direct_contrib_lib = None
+        self._init_direct_contrib_lib()
+
+
         
         # interaction lists
         self.il = fmm_interaction_lists.compute_interaction_lists(domain.extent, self.subdivision)
@@ -103,25 +119,14 @@ class MCFMM:
             tmp += getattr(g, datx)._dat.nbytes
         self.dat_size = tmp
 
-        
-        s = self.subdivision
-        s = [sx ** (self.R - 1) for sx in s]
-        ncells_finest = s[0] * s[1] * s[2]
-        self.cell_occupation_ga = data.GlobalArray(ncomp=ncells_finest, dtype=INT64)
-        self.cell_occupation = None
-        self.cell_indices = np.zeros((s[2], s[1], s[0], 10), INT64)
-        self.max_occupancy = None
+
 
         self.energy = None
-
-        self.direct_map = {}
 
         self._cell_bin_loop = None
         self._cell_bin_format_lib = None
         self._init_bin_loop()
 
-        self._direct_contrib_lib = None
-        self._init_direct_contrib_lib()
         self._init_indirect_accept_lib()
         self._init_indirect_propose_lib()
     
@@ -459,150 +464,6 @@ class MCFMM:
 
 
 
-    def _init_direct_contrib_lib(self):
-
-        source = r'''
-
-        extern "C" int direct_entry(
-            const INT64 MODE,                   // -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
-            const INT64 n,                      //number of contributions to compute
-            const INT64 noffsets,               //number of nearest neighbour cells
-            const INT64 occ_stride,
-            const INT64 * RESTRICT I,           //ids to compute (might be null)
-            const INT64 * RESTRICT IDS,         //particle ids
-            const REAL * RESTRICT P,            //positions
-            const REAL * RESTRICT Q,            //charges
-            const INT64 * RESTRICT CELLS,       //particle cells
-            const INT64 * RESTRICT OCC,         //cell occupancies
-            const INT64 * RESTRICT MAP,         //map from cells to particle ids (local ids)
-            const INT64 * RESTRICT NNMAP,       //nearest neighbour offsets
-            const REAL * RESTRICT NEW_POS,      //new position if MODE == 1
-            const INT64 * RESTRICT NEW_CELL,    //new cells if MODE == 1
-            REAL * RESTRICT U                   //output energy array
-        ){{
-            
-            REAL UTOTAL = 0.0;
-
-            #pragma omp parallel for reduction(+: UTOTAL) if((n>1))
-            for(INT64 px=0 ; px<n ; px++){{
-                
-                INT64 ix1;
-                if (MODE < 0) {{
-                    ix1 = px;
-                }} else {{
-                    ix1 = I[px];
-                }}
-
-
-                const INT64 ix = ix1;
-                REAL UTMP = 0.0;
- 
-                REAL rpx = P[ix * 3 + 0];
-                REAL rpy = P[ix * 3 + 1];
-                REAL rpz = P[ix * 3 + 2];
-
-                if (MODE == 1){{
-                    rpx = NEW_POS[px * 3 + 0];
-                    rpy = NEW_POS[px * 3 + 1];
-                    rpz = NEW_POS[px * 3 + 2];
-                }}
-
-
-                const REAL rx = rpx;
-                const REAL ry = rpy;
-                const REAL rz = rpz;
-
-                INT64 CIX = CELLS[ix * 3 + 0];
-                INT64 CIY = CELLS[ix * 3 + 1];
-                INT64 CIZ = CELLS[ix * 3 + 2];
-
-                if (MODE == 1){{
-                    CIX = NEW_CELL[px * 3 + 0];
-                    CIY = NEW_CELL[px * 3 + 1];
-                    CIZ = NEW_CELL[px * 3 + 2];
-                }}
-
-
-
-                const REAL qi = Q[ix];
-                const INT64 idi = IDS[ix];
-                
-                //for each offset
-
-
-                //#pragma omp parallel for reduction(+: UTMP) if((n==1)) schedule(static,1)
-                for(INT64 ox=0 ; ox<noffsets ; ox++){{
-                    
-                    const INT64 ocx = CIX + NNMAP[ox * 3 + 0];
-                    const INT64 ocy = CIY + NNMAP[ox * 3 + 1];
-                    const INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
-
-                    if (ocx < 0) {{continue;}}
-                    if (ocy < 0) {{continue;}}
-                    if (ocz < 0) {{continue;}}
-                    if (ocx >= LCX) {{continue;}}
-                    if (ocy >= LCY) {{continue;}}
-                    if (ocz >= LCZ) {{continue;}}
-
-                    // for each particle in the cell
-                    
-                    const INT64 cj = ocx + LCX * (ocy + LCY * ocz);
-                    for(INT64 jxi=0 ; jxi<OCC[cj] ; jxi++){{
-
-                        const INT64 jx = MAP[occ_stride * cj + jxi];
-
-                        const REAL rjx = P[jx * 3 + 0];
-                        const REAL rjy = P[jx * 3 + 1];
-                        const REAL rjz = P[jx * 3 + 2];
-                        const REAL qj = Q[jx];
-                        const INT64 idj = IDS[jx];
-
-                        const REAL dx = rx - rjx;
-                        const REAL dy = ry - rjy;
-                        const REAL dz = rz - rjz;
-
-                        const REAL r2 = dx*dx + dy*dy + dz*dz;
-
-                        const bool same_id = (MODE > 0) || ( (MODE < 1) && (idi != idj) );
-                        UTMP += (same_id) ? qj / sqrt(r2) : 0.0;
-                    
-                    }}
-                }}
-
-                    
-                if (MODE != -1) {{
-                    U[px] = UTMP * qi;
-                }} else {{
-                    UTOTAL += UTMP * qi;
-                }}
-            }}
-
-            if (MODE == -1){{
-                U[0] = UTOTAL;
-            }}
-
-            return 0;
-        }}
-        '''.format(
-        )
-
-        header = r'''
-        #include <math.h>
-        #include <stdio.h>
-        #define REAL double
-        #define INT64 int64_t
-        #define LCX {LCX}
-        #define LCY {LCY}
-        #define LCZ {LCZ}
-        '''.format(
-            LCX=self.subdivision[0] ** (self.R - 1),
-            LCY=self.subdivision[1] ** (self.R - 1),
-            LCZ=self.subdivision[2] ** (self.R - 1)
-        )
-
-        self._direct_contrib_lib = lib.build.simple_lib_creator(header, source)['direct_entry']
-
-
     def _init_bin_loop(self):
         
         g = self.group
@@ -897,37 +758,6 @@ class MCFMM:
         s = [sx ** (self.R - 1) for sx in s]
         self.cell_occupation = self.cell_occupation_ga[:].copy().reshape((s[2], s[1], s[0]))
 
-        # mc_nexp = g._mc_nexp.view
-        # mc_charge = g._mc_charge.view
-        # mc_radius = g._mc_radius.view
-        # mc_theta = g._mc_theta.view
-        # mc_phi = g._mc_phi.view
-        # mc_ptrs = g._mc_ptrs.view
-        # mc_level = g._mc_level.view
-        # mc_cl = g._mc_cl.view
-
-        # self._cell_bin_format_lib(
-        #     INT64(N),
-        #     INT64(self.il_max_len * self.R),
-        #     INT64(self.il_pd_ptr_stride),
-        #     mc_nexp.ctypes.get_as_parameter(),
-        #     mc_level.ctypes.get_as_parameter(),
-        #     mc_cl.ctypes.get_as_parameter(),
-        #     start_ptrs.ctypes.get_as_parameter(),
-        #     mc_ptrs.ctypes.get_as_parameter()
-        # )
-
-
-        # for px in range(N):
-        #     self.mc_lee.compute_local_exp(
-        #         mc_nexp[px, 0],
-        #         mc_charge[px,:],
-        #         mc_radius[px, :],
-        #         mc_theta[px, :],
-        #         mc_phi[px, :],
-        #         mc_ptrs[px, :]
-        #     )
-
 
         for rx in range(self.R):
             
@@ -936,88 +766,6 @@ class MCFMM:
             # err = np.linalg.norm(self.tree_local_ga[s:e:] - self.tree_local[rx].ravel())
             # print(rx, err)
             self.tree_local[rx].ravel()[:] = self.tree_local_ga[s:e:].copy()
-
-
-
-
-        return
-        # to pass into lib
-        charge = np.zeros(self.il_max_len * self.R, REAL)
-        radius = np.zeros_like(charge)
-        theta = np.zeros_like(charge)
-        phi = np.zeros_like(charge)
-        ptrs = np.zeros(self.il_max_len * self.R, ctypes.c_void_p)
-
-
-        with g._mc_fmm_cells.modify_view() as gm:
-
-            for px in range(N):
-
-                n = 0
-                pos = self.positions[px,:].copy()
-                q = float(self.charges[px, 0])
-
-                # cell on finest level
-                cell = self._get_cell(pos)
-
-                # CE+LL WRITING DISABLED
-                #gm[px, :] = cell
-                if tuple(cell) != tuple(gm[px, :]): import ipdb; ipdb.set_trace()
-
-                for level in range(self.R-1, -1, -1):
-                    
-                    # cell on level 
-                    cell_level = self._get_parent(cell, level)
-                    child_index = self._get_child_index(cell_level)
-
-                    il = self.il[0][child_index]
-
-                    for ox in il:
-                        ccc = (
-                            cell_level[0] + ox[0], 
-                            cell_level[1] + ox[1], 
-                            cell_level[2] + ox[2], 
-                        )
-
-                        # test if outside domain
-                        sl = 2**level
-                        if ccc[0] < 0: continue
-                        if ccc[1] < 0: continue
-                        if ccc[2] < 0: continue
-                        if ccc[0] >= sl: continue
-                        if ccc[1] >= sl: continue
-                        if ccc[2] >= sl: continue
-
-                        sph = self._get_cell_disp(ccc, pos, level)
-                        #self.lee.local_exp(sph, q, self.tree_local[level][ccc[2], ccc[1], ccc[0], :])
-
-                        charge[n] = q
-                        radius[n] = sph[0]
-                        theta[n] = sph[1]
-                        phi[n] = sph[2]
-                        ptrs[n] = self.tree_local[level][ccc[2], ccc[1], ccc[0], :].ctypes.get_as_parameter().value
-                        n += 1
-
-                err = np.linalg.norm(charge[:n] - g._mc_charge[px, :].ravel()[:n], np.inf)
-                print(err)
-                if err > 10.**-12: import ipdb; ipdb.set_trace()
-                err = np.linalg.norm(radius[:n] - g._mc_radius[px, :].ravel()[:n], np.inf)
-                print(err)
-                if err > 10.**-12: import ipdb; ipdb.set_trace()
-                err = np.linalg.norm(theta[:n] - g._mc_theta[px, :].ravel()[:n], np.inf)
-                print(err)
-                err = np.linalg.norm(phi[:n] - g._mc_phi[px, :].ravel()[:n], np.inf)
-                print(err)               
-                if err > 10.**-12: import ipdb; ipdb.set_trace()
-                if g._mc_nexp[px, 0] != n: import ipdb; ipdb.set_trace()
-
-                aaa = g._mc_ptrs[px, :].view(dtype=ctypes.c_void_p)
-                err = np.linalg.norm(aaa[:n].ravel() - ptrs[:n], np.inf)
-                print(err)               
-                if err > 10.**-12: import ipdb; ipdb.set_trace()
-
-                # EXPANSION COMPUTATION DISABLEED
-                #self.mc_lee.compute_local_exp(n, charge, radius, theta, phi, ptrs)
 
 
 
@@ -1493,4 +1241,147 @@ class MCFMM:
 
 
  
+    def _init_direct_contrib_lib(self):
+
+        source = r'''
+
+        extern "C" int direct_entry(
+            const INT64 MODE,                   // -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
+            const INT64 n,                      //number of contributions to compute
+            const INT64 noffsets,               //number of nearest neighbour cells
+            const INT64 occ_stride,
+            const INT64 * RESTRICT I,           //ids to compute (might be null)
+            const INT64 * RESTRICT IDS,         //particle ids
+            const REAL * RESTRICT P,            //positions
+            const REAL * RESTRICT Q,            //charges
+            const INT64 * RESTRICT CELLS,       //particle cells
+            const INT64 * RESTRICT OCC,         //cell occupancies
+            const INT64 * RESTRICT MAP,         //map from cells to particle ids (local ids)
+            const INT64 * RESTRICT NNMAP,       //nearest neighbour offsets
+            const REAL * RESTRICT NEW_POS,      //new position if MODE == 1
+            const INT64 * RESTRICT NEW_CELL,    //new cells if MODE == 1
+            REAL * RESTRICT U                   //output energy array
+        ){{
+            
+            REAL UTOTAL = 0.0;
+
+            #pragma omp parallel for reduction(+: UTOTAL) if((n>1))
+            for(INT64 px=0 ; px<n ; px++){{
+                
+                INT64 ix1;
+                if (MODE < 0) {{
+                    ix1 = px;
+                }} else {{
+                    ix1 = I[px];
+                }}
+
+
+                const INT64 ix = ix1;
+                REAL UTMP = 0.0;
+ 
+                REAL rpx = P[ix * 3 + 0];
+                REAL rpy = P[ix * 3 + 1];
+                REAL rpz = P[ix * 3 + 2];
+
+                if (MODE == 1){{
+                    rpx = NEW_POS[px * 3 + 0];
+                    rpy = NEW_POS[px * 3 + 1];
+                    rpz = NEW_POS[px * 3 + 2];
+                }}
+
+
+                const REAL rx = rpx;
+                const REAL ry = rpy;
+                const REAL rz = rpz;
+
+                INT64 CIX = CELLS[ix * 3 + 0];
+                INT64 CIY = CELLS[ix * 3 + 1];
+                INT64 CIZ = CELLS[ix * 3 + 2];
+
+                if (MODE == 1){{
+                    CIX = NEW_CELL[px * 3 + 0];
+                    CIY = NEW_CELL[px * 3 + 1];
+                    CIZ = NEW_CELL[px * 3 + 2];
+                }}
+
+
+
+                const REAL qi = Q[ix];
+                const INT64 idi = IDS[ix];
+                
+                //for each offset
+
+
+                //#pragma omp parallel for reduction(+: UTMP) if((n==1)) schedule(static,1)
+                for(INT64 ox=0 ; ox<noffsets ; ox++){{
+                    
+                    const INT64 ocx = CIX + NNMAP[ox * 3 + 0];
+                    const INT64 ocy = CIY + NNMAP[ox * 3 + 1];
+                    const INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
+
+                    if (ocx < 0) {{continue;}}
+                    if (ocy < 0) {{continue;}}
+                    if (ocz < 0) {{continue;}}
+                    if (ocx >= LCX) {{continue;}}
+                    if (ocy >= LCY) {{continue;}}
+                    if (ocz >= LCZ) {{continue;}}
+
+                    // for each particle in the cell
+                    
+                    const INT64 cj = ocx + LCX * (ocy + LCY * ocz);
+                    for(INT64 jxi=0 ; jxi<OCC[cj] ; jxi++){{
+
+                        const INT64 jx = MAP[occ_stride * cj + jxi];
+
+                        const REAL rjx = P[jx * 3 + 0];
+                        const REAL rjy = P[jx * 3 + 1];
+                        const REAL rjz = P[jx * 3 + 2];
+                        const REAL qj = Q[jx];
+                        const INT64 idj = IDS[jx];
+
+                        const REAL dx = rx - rjx;
+                        const REAL dy = ry - rjy;
+                        const REAL dz = rz - rjz;
+
+                        const REAL r2 = dx*dx + dy*dy + dz*dz;
+
+                        const bool same_id = (MODE > 0) || ( (MODE < 1) && (idi != idj) );
+                        UTMP += (same_id) ? qj / sqrt(r2) : 0.0;
+                    
+                    }}
+                }}
+
+                    
+                if (MODE != -1) {{
+                    U[px] = UTMP * qi;
+                }} else {{
+                    UTOTAL += UTMP * qi;
+                }}
+            }}
+
+            if (MODE == -1){{
+                U[0] = UTOTAL;
+            }}
+
+            return 0;
+        }}
+        '''.format(
+        )
+
+        header = r'''
+        #include <math.h>
+        #include <stdio.h>
+        #define REAL double
+        #define INT64 int64_t
+        #define LCX {LCX}
+        #define LCY {LCY}
+        #define LCZ {LCZ}
+        '''.format(
+            LCX=self.subdivision[0] ** (self.R - 1),
+            LCY=self.subdivision[1] ** (self.R - 1),
+            LCZ=self.subdivision[2] ** (self.R - 1)
+        )
+
+        self._direct_contrib_lib = lib.build.simple_lib_creator(header, source)['direct_entry']
+
 
