@@ -656,7 +656,7 @@ class MCFMM(MCCommon):
         energy = 0.0
         energy_py = 0.0
         for px in range(self.group.npart_local):
-            tmp = self._get_old_energy(px)
+            tmp = self._get_old_energy(px, profile=False)
             energy_py += tmp
 
         energy += energy_py
@@ -664,7 +664,7 @@ class MCFMM(MCCommon):
         return 0.5 * energy
     
 
-    def _get_old_energy(self, px):
+    def _get_old_energy(self, px, profile=True):
 
         g = self.positions.group
         C = g._mc_fmm_cells
@@ -690,11 +690,14 @@ class MCFMM(MCCommon):
             ctypes.byref(energy_c)
         )
         energy += energy_c.value
-        self._profile_inc('indirect_old', time.time() - t0)
+        if profile: self._profile_inc('indirect_old', time.time() - t0)
 
+
+        t0 = time.time()
         direct_contrib = self.direct.get_old_energy(px)
-        energy += direct_contrib
+        if profile: self._profile_inc('direct_get_old', time.time() - t0)
 
+        energy += direct_contrib
         return energy
 
 
@@ -719,7 +722,10 @@ class MCFMM(MCCommon):
         energy += energy_c.value
         self._profile_inc('indirect_new', time.time() - t0)
 
+
+        t0 = time.time()
         direct_contrib = self.direct.get_new_energy(px, pos)
+        self._profile_inc('direct_get_new', time.time() - t0)
 
         energy += direct_contrib
 

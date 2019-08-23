@@ -1,7 +1,7 @@
 
 
 import numpy as np
-from ppmd import data, loop, kernel, access, lib, opt
+from ppmd import data, loop, kernel, access, lib, opt, pairloop
 from ppmd.coulomb import fmm_interaction_lists, octal, mm
 from coulomb_kmc import kmc_expansion_tools, common
 import ctypes
@@ -45,6 +45,8 @@ class MCFMM_MM(MCCommon):
         self.group._mc_mm_ids = pd(ncomp=1, dtype=INT64)
         self.direct = DirectCommon(positions, charges, domain, boundary_condition,
             r, self.mm.subdivision, self.group._mm_fine_cells, self.group._mc_mm_ids)
+        
+        self.sh = pairloop.state_handler.StateHandler(state=None, shell_cutoff=self.mm.max_cell_width, pair=False)
 
         self._init_libs()
 
@@ -102,15 +104,23 @@ class MCFMM_MM(MCCommon):
             INT64
         )
 
+        t0 = time.time()
+        
+        time_taken = REAL(0)
+
         self._indirect_accept_lib(
             INT64(px),
-            self.mm.sh.get_pointer(self.positions(access.READ)),
-            self.mm.sh.get_pointer(self.charges(access.READ)),
-            self.mm.sh.get_pointer(self.group._mm_cells(access.READ)),
+            self.sh.get_pointer(self.positions(access.READ)),
+            self.sh.get_pointer(self.charges(access.READ)),
+            self.sh.get_pointer(self.group._mm_cells(access.READ)),
             self.tree.ctypes.get_as_parameter(),
             new_pos.ctypes.get_as_parameter(),
-            mm_cells.ctypes.get_as_parameter()
+            mm_cells.ctypes.get_as_parameter(),
+            ctypes.byref(time_taken)
         )
+        self._profile_inc('indirect_accept', time.time() - t0)
+        self._profile_inc('indirect_accept_internal', time_taken.value)
+
 
 
         t0 = time.time()
@@ -138,6 +148,9 @@ class MCFMM_MM(MCCommon):
         self._profile_inc('dats_accept', time.time() - t0)
         self._profile_inc('num_accept', 1)
     
+
+    def free(self):
+        pass
 
 
     def _get_new_cells(self, position):
@@ -191,8 +204,10 @@ class MCFMM_MM(MCCommon):
         charge = REAL(charge)
         
         new_cell, mm_cells, mm_child_index = self._get_new_cells(position)
-
-            
+        
+        time_taken = REAL(0)
+        
+        t0 = time.time()
         self._indirect_lib(
             INT64(0),
             position.ctypes.get_as_parameter(),
@@ -201,41 +216,47 @@ class MCFMM_MM(MCCommon):
             mm_cells.ctypes.get_as_parameter(),
             mm_child_index.ctypes.get_as_parameter(),
             self.tree.ctypes.get_as_parameter(),
-            ctypes.byref(ie)
+            ctypes.byref(ie),
+            ctypes.byref(time_taken)
         )    
-
+        self._profile_inc('indirect_get_new', time.time() - t0)
+        self._profile_inc('indirect_get_new_internal', time_taken.value)
+        
+        t0 = time.time()
         direct_contrib = self.direct.get_new_energy(ix, position)
+        self._profile_inc('direct_get_new', time.time() - t0)
 
 
         return ie.value + direct_contrib
 
 
 
-    def _get_self_interaction(self, px, pos):
-
-        charge = self.charges[px, 0]
-        old_pos = self.positions[px, :]
-
-        return charge * charge / np.linalg.norm(old_pos.ravel() - pos.ravel())
-
-    
-
     def _get_old_energy(self, ix):
         
         ie = REAL(0)
-            
+        time_taken = REAL(0)
+        
+        t0 = time.time()
         self._indirect_lib(
             INT64(ix),
-            self.mm.sh.get_pointer(self.positions(access.READ)),
-            self.mm.sh.get_pointer(self.charges(access.READ)),
+            self.sh.get_pointer(self.positions(access.READ)),
+            self.sh.get_pointer(self.charges(access.READ)),
             self.mm.il_scalararray.ctypes_data,
-            self.mm.sh.get_pointer(self.group._mm_cells(access.READ)),
-            self.mm.sh.get_pointer(self.group._mm_child_index(access.READ)),
+            self.sh.get_pointer(self.group._mm_cells(access.READ)),
+            self.sh.get_pointer(self.group._mm_child_index(access.READ)),
             self.tree.ctypes.get_as_parameter(),
-            ctypes.byref(ie)
+            ctypes.byref(ie),
+            ctypes.byref(time_taken)
         )
 
+        self._profile_inc('indirect_get_old', time.time() - t0)
+        self._profile_inc('indirect_get_old_internal', time_taken.value)
+
+
+        t0 = time.time()
         direct_contrib = self.direct.get_old_energy(ix)
+        self._profile_inc('direct_get_old', time.time() - t0)
+
         return ie.value + direct_contrib
 
 
@@ -336,7 +357,7 @@ class MCFMM_MM(MCCommon):
             const REAL  * RESTRICT TREE,
                   REAL  * RESTRICT OUT_ENERGY
         ){{
-
+            
             const double rx = P[0];
             const double ry = P[1];
             const double rz = P[2];
@@ -423,9 +444,11 @@ class MCFMM_MM(MCCommon):
             const INT64 * RESTRICT MM_CELLS,
             const INT64 * RESTRICT MM_CHILD_INDEX,
             const REAL  * RESTRICT TREE,
-                  REAL  * RESTRICT OUT_ENERGY       
+                  REAL  * RESTRICT OUT_ENERGY,
+                  REAL  * RESTRICT TIME_TAKEN
         ){{
             
+            std::chrono::high_resolution_clock::time_point _loop_timer_t0 = std::chrono::high_resolution_clock::now();
             
             kernel(
                 &P[IX*3],
@@ -437,7 +460,9 @@ class MCFMM_MM(MCCommon):
                 OUT_ENERGY
             );
 
-
+            std::chrono::high_resolution_clock::time_point _loop_timer_t1 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> _loop_timer_res = _loop_timer_t1 - _loop_timer_t0;
+            *TIME_TAKEN = (double) _loop_timer_res.count();
                 
             return 0;
         }}
@@ -475,7 +500,7 @@ class MCFMM_MM(MCCommon):
             LEVEL_OFFSETS=level_offsets            
         )
 
-        self._indirect_lib = lib.build.simple_lib_creator('#include <math.h>', src)['get_energy']
+        self._indirect_lib = lib.build.simple_lib_creator('#include <math.h>\n#include <chrono>', src)['get_energy']
         
 
         # =============================================================================================================
@@ -589,11 +614,14 @@ class MCFMM_MM(MCCommon):
             const INT64 * RESTRICT MM_CELLS,
                   REAL  * RESTRICT TREE,
             const REAL  * RESTRICT NEW_P,
-            const INT64 * RESTRICT NEW_MM_CELLS
+            const INT64 * RESTRICT NEW_MM_CELLS,
+                  REAL  * RESTRICT TIME_TAKEN
         ){{
             
             // remove the old contrib
 
+            std::chrono::high_resolution_clock::time_point _loop_timer_t0 = std::chrono::high_resolution_clock::now();
+            
             const REAL tmp_q = -1.0 * Q[IX];
             kernel(
                 &P[IX*3],
@@ -611,7 +639,11 @@ class MCFMM_MM(MCCommon):
                 TREE
             );
 
-                
+ 
+            std::chrono::high_resolution_clock::time_point _loop_timer_t1 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> _loop_timer_res = _loop_timer_t1 - _loop_timer_t0;
+            *TIME_TAKEN = (double) _loop_timer_res.count();
+               
             return 0;
         }}
 
@@ -648,4 +680,4 @@ class MCFMM_MM(MCCommon):
             LEVEL_OFFSETS=level_offsets
         )
 
-        self._indirect_accept_lib = lib.build.simple_lib_creator('#include <math.h>', src)['indirect_accept']
+        self._indirect_accept_lib = lib.build.simple_lib_creator('#include <math.h>\n#include <chrono>', src)['indirect_accept']
