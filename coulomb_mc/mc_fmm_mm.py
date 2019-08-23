@@ -72,6 +72,8 @@ class MCFMM_MM(MCCommon):
         new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
         self_energy = self._get_self_interaction(px, pos)
         # print("M\t-->", old_energy, new_energy, self_energy)
+
+        self._profile_inc('num_propose', 1)
         return new_energy - old_energy - self_energy
 
     
