@@ -2,11 +2,24 @@
 
 import numpy as np
 from ppmd import opt
-
+from enum import Enum
 
 
 
 PROFILE = opt.PROFILE
+
+class BCType(Enum):
+    """
+    Enum to indicate boundary condition type.
+    """
+
+    PBC = 'pbc'
+    """Fully periodic boundary conditions"""
+    FREE_SPACE = 'free_space'
+    """Free-space, e.g. vacuum, boundary conditions."""
+    NEAREST = '27'
+    """Primary image and the surrounding 26 nearest neighbours."""
+
 
 
 class MCCommon:

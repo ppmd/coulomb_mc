@@ -13,7 +13,7 @@ import time
 
 from ppmd.coulomb.sph_harm import *
 from coulomb_mc.mc_direct import DirectCommon
-from coulomb_mc.mc_common import MCCommon
+from coulomb_mc.mc_common import MCCommon, BCType
 
 
 
@@ -31,7 +31,7 @@ class MCFMM_MM(MCCommon):
         self.charges = charges
         self.domain = domain
         self.comm = self.domain.comm
-        self.boundary_condition = boundary_condition
+        self.boundary_condition = BCType(boundary_condition)
         self.R = r
         self.L = l
         self.ncomp = (self.L ** 2) * 2

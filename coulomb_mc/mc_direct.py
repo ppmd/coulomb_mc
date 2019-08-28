@@ -11,7 +11,7 @@ from coulomb_mc import mc_expansion_tools
 
 import time
 
-from coulomb_mc.mc_common import MCCommon
+from coulomb_mc.mc_common import MCCommon, BCType
 
 
 Constant = kernel.Constant
@@ -31,7 +31,7 @@ class DirectCommon(MCCommon):
         self.charges = charges
         self.domain = domain
         self.comm = self.domain.comm
-        self.boundary_condition = boundary_condition
+        self.boundary_condition = BCType(boundary_condition)
         self.R = r
         self.subdivision = subdivision
         self.group = self.positions.group
@@ -217,6 +217,29 @@ class DirectCommon(MCCommon):
 
  
     def _init_direct_contrib_lib(self):
+        
+            
+        bc = self.boundary_condition
+
+        if bc == BCType.FREE_SPACE:
+            bc_block = r'''
+                if (ocx < 0) {{continue;}}
+                if (ocy < 0) {{continue;}}
+                if (ocz < 0) {{continue;}}
+                if (ocx >= LCX) {{continue;}}
+                if (ocy >= LCY) {{continue;}}
+                if (ocz >= LCZ) {{continue;}}
+            '''
+
+        elif bc in (BCType.PBC, BCType.NEAREST):
+            bc_block = r'''
+                ocx %= LCX;
+                ocy %= LCY;
+                ocz %= LCZ;
+            '''
+        else:
+            raise RuntimeError('Unknown or not implemented boundary condition.')
+
 
         source = r'''
 
@@ -287,22 +310,16 @@ class DirectCommon(MCCommon):
                 //for each offset
 
 
-                //#pragma omp parallel for reduction(+: UTMP) if((n==1)) schedule(static,1)
+                #pragma omp parallel for reduction(+: UTMP) if((n==1)) schedule(static,1)
                 for(INT64 ox=0 ; ox<noffsets ; ox++){{
                     
-                    const INT64 ocx = CIX + NNMAP[ox * 3 + 0];
-                    const INT64 ocy = CIY + NNMAP[ox * 3 + 1];
-                    const INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
-
-                    if (ocx < 0) {{continue;}}
-                    if (ocy < 0) {{continue;}}
-                    if (ocz < 0) {{continue;}}
-                    if (ocx >= LCX) {{continue;}}
-                    if (ocy >= LCY) {{continue;}}
-                    if (ocz >= LCZ) {{continue;}}
+                    INT64 ocx = CIX + NNMAP[ox * 3 + 0];
+                    INT64 ocy = CIY + NNMAP[ox * 3 + 1];
+                    INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
+                    
+                    {BC_BLOCK}
 
                     // for each particle in the cell
-                    
                     const INT64 cj = ocx + LCX * (ocy + LCY * ocz);
                     for(INT64 jxi=0 ; jxi<OCC[cj] ; jxi++){{
 
@@ -341,6 +358,7 @@ class DirectCommon(MCCommon):
             return 0;
         }}
         '''.format(
+            BC_BLOCK=bc_block
         )
 
         header = r'''
