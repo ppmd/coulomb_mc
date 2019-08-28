@@ -197,6 +197,8 @@ class MCFMM(MCCommon):
 
                 tmp_energy += inner_energy;
 
+                // printf("    C R = %d contrib = %f\n", rx, inner_energy);
+
                 // compute the cell on the next level
 
             }}
@@ -693,10 +695,12 @@ class MCFMM(MCCommon):
         if profile: self._profile_inc('indirect_old', time.time() - t0)
 
 
+
         t0 = time.time()
         direct_contrib = self.direct.get_old_energy(px)
         if profile: self._profile_inc('direct_get_old', time.time() - t0)
 
+        # print("C GET OLD", direct_contrib, energy)
         energy += direct_contrib
         return energy
 
@@ -751,7 +755,7 @@ class MCFMM(MCCommon):
         old_energy = self._get_old_energy(px)
         new_energy = self._get_new_energy(px, pos)
         self_energy = self._get_self_interaction(px, pos)
-        #print("L\t-->", old_energy, new_energy, self_energy)
+        # print("C\t-->", old_energy, new_energy, self_energy)
 
         self._profile_inc('num_propose', 1)
         return  new_energy - old_energy - self_energy

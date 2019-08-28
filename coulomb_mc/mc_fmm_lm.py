@@ -258,6 +258,7 @@ class MCFMM_LM(MCCommon):
         direct_contrib = self.direct.get_old_energy(ix)
         self._profile_inc('direct_get_old', time.time() - t0)
 
+        # print("L GET OLD", direct_contrib, ie.value)
         return ie.value + direct_contrib
 
 
@@ -272,20 +273,20 @@ class MCFMM_LM(MCCommon):
                 if (ocx < 0) {{continue;}}
                 if (ocy < 0) {{continue;}}
                 if (ocz < 0) {{continue;}}
-                if (ocx >= LCX) {{continue;}}
-                if (ocy >= LCY) {{continue;}}
-                if (ocz >= LCZ) {{continue;}}
+                if (ocx >= ncx) {{continue;}}
+                if (ocy >= ncx) {{continue;}}
+                if (ocz >= ncx) {{continue;}}
             '''
 
         elif bc in (BCType.PBC, BCType.NEAREST):
             bc_block = r'''
-                ocx %= LCX;
-                ocy %= LCY;
-                ocz %= LCZ;
+                ocx %= ncx;
+                ocy %= ncx;
+                ocz %= ncx;
             '''
         else:
             raise RuntimeError('Unknown or not implemented boundary condition.')
-
+        
 
         g = self.group
         extent = self.domain.extent
@@ -406,6 +407,8 @@ class MCFMM_LM(MCCommon):
                 double tmp_energy = 0.0;
                 {ENERGY_COMP}
 
+                //printf("    L R = %d contrib = %f\n", level, tmp_energy);
+
                 particle_energy += tmp_energy;
 
             }}
@@ -479,7 +482,10 @@ class MCFMM_LM(MCCommon):
             LEVEL_OFFSETS=self.lm.level_offsets_str
         )
 
-        self._indirect_lib = lib.build.simple_lib_creator('#include <math.h>\n#include <chrono>', src)['get_energy']
+        self._indirect_lib = lib.build.simple_lib_creator(
+            '#include <math.h>\n#include <chrono>\n#include<stdio.h>',
+            src
+        )['get_energy']
         
 
         # =============================================================================================================
@@ -690,7 +696,10 @@ class MCFMM_LM(MCCommon):
             LEVEL_OFFSETS=self.lm.level_offsets_str
         )
 
-        self._indirect_accept_lib = lib.build.simple_lib_creator('#include <math.h>\n#include <chrono>', src)['indirect_accept']
+        self._indirect_accept_lib = lib.build.simple_lib_creator(
+            '#include <math.h>\n#include <chrono>\n#include <stdio.h>', 
+            src
+        )['indirect_accept']
 
 
 

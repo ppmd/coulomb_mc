@@ -239,7 +239,8 @@ def test_free_space_4():
 
     err = abs(MC.energy - correct) / abs(correct)
     assert err < 10.**-5
-
+    err = abs(MCL.energy - correct) / abs(correct)
+    assert err < 10.**-5
 
     for testx in range(100):
 
@@ -266,8 +267,6 @@ def test_free_space_4():
         
         err = abs(correct - e0) / abs(correct)
         #print(err, correct, e0)
-
-
 
         assert err < 10.**-5
         
