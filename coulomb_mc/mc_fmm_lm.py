@@ -242,7 +242,7 @@ class MCFMM_LM(MCCommon):
         direct_contrib = self.direct.get_new_energy(ix, position)
         self._profile_inc('direct_get_new', time.time() - t0)
 
-        print("L GET NEW", "direct:", direct_contrib, "indirect:", ie.value)
+        # print("L GET NEW", "direct:", direct_contrib, "indirect:", ie.value)
 
         return ie.value + direct_contrib
 
@@ -273,7 +273,7 @@ class MCFMM_LM(MCCommon):
         direct_contrib = self.direct.get_old_energy(ix)
         self._profile_inc('direct_get_old', time.time() - t0)
 
-        print("L GET OLD", "direct:", direct_contrib, "indirect:", ie.value)
+        # print("L GET OLD", "direct:", direct_contrib, "indirect:", ie.value)
         return ie.value + direct_contrib
 
 
@@ -608,13 +608,15 @@ class MCFMM_LM(MCCommon):
                     int64_t ocy = cfy + IL[ci * IL_STRIDE_OUTER + ox * 3 + 1];
                     int64_t ocz = cfz + IL[ci * IL_STRIDE_OUTER + ox * 3 + 2];
 
+                    const double dx = rx - ((-HEX) + (0.5 * wx) + (ocx * wx));
+                    const double dy = ry - ((-HEY) + (0.5 * wy) + (ocy * wy));
+                    const double dz = rz - ((-HEZ) + (0.5 * wz) + (ocz * wz));
+
                     {BC_BLOCK}
 
                     const int64_t lin_ind = ocx + NCELLS_X[level] * (ocy + NCELLS_Y[level] * ocz);
 
-                    const double dx = rx - ((-HEX) + (0.5 * wx) + (ocx * wx));
-                    const double dy = ry - ((-HEY) + (0.5 * wy) + (ocy * wy));
-                    const double dz = rz - ((-HEZ) + (0.5 * wz) + (ocz * wz));
+
 
                     const double xy2 = dx * dx + dy * dy;
                     const double radius = sqrt(xy2 + dz * dz);

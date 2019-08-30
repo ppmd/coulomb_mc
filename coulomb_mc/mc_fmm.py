@@ -9,7 +9,7 @@ import math
 
 from coulomb_mc import mc_expansion_tools
 from coulomb_mc.mc_direct import DirectCommon
-from coulomb_mc.mc_common import MCCommon
+from coulomb_mc.mc_common import MCCommon, BCType
 
 
 import time
@@ -21,7 +21,6 @@ INT64 = ctypes.c_int64
 PROFILE = opt.PROFILE
 
 
-
 class MCFMM(MCCommon):
 
     def __init__(self, positions, charges, domain, boundary_condition, r, l):
@@ -30,7 +29,7 @@ class MCFMM(MCCommon):
         self.charges = charges
         self.domain = domain
         self.comm = self.domain.comm
-        self.boundary_condition = boundary_condition
+        self.boundary_condition = BCType(boundary_condition)
         self.R = r
         self.L = l
         self.ncomp = (self.L ** 2) * 2

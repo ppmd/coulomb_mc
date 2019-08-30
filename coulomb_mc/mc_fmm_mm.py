@@ -85,7 +85,7 @@ class MCFMM_MM(MCCommon):
         old_energy = self._get_old_energy(px)
         new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
         self_energy = self._get_self_interaction(px, pos)
-        # print("M\t-->", old_energy, new_energy, self_energy)
+        #print("M\t-->", old_energy, new_energy, self_energy)
 
         self._profile_inc('num_propose', 1)
         return new_energy - old_energy - self_energy
@@ -273,6 +273,7 @@ class MCFMM_MM(MCCommon):
         direct_contrib = self.direct.get_old_energy(ix)
         self._profile_inc('direct_get_old', time.time() - t0)
 
+        #print("M GET OLD", "direct:", direct_contrib, "indirect:", ie.value)
         return ie.value + direct_contrib
 
 
@@ -325,6 +326,28 @@ class MCFMM_MM(MCCommon):
             nz *= self.mm.subdivision[2]
 
         level_offsets = ','.join([str(ix) for ix in level_offsets])
+
+
+        bc = self.boundary_condition
+
+        if bc == BCType.FREE_SPACE:
+            bc_block = r'''
+                if (ocx < 0) {{continue;}}
+                if (ocy < 0) {{continue;}}
+                if (ocz < 0) {{continue;}}
+                if (ocx >= ncx) {{continue;}}
+                if (ocy >= ncx) {{continue;}}
+                if (ocz >= ncx) {{continue;}}
+            '''
+
+        elif bc in (BCType.PBC, BCType.NEAREST):
+            bc_block = r'''
+                ocx = (ocx + ncx) % ncx;
+                ocy = (ocy + ncy) % ncy;
+                ocz = (ocz + ncz) % ncz;
+            '''
+        else:
+            raise RuntimeError('Unknown or not implemented boundary condition.')
 
 
         src = r'''
@@ -380,7 +403,7 @@ class MCFMM_MM(MCCommon):
 
             double particle_energy = 0.0;
 
-            for( int level=0 ; level<R ; level++ ){{
+            for( int level=1 ; level<R ; level++ ){{
 
                 // cell on this level
                 const int64_t cfx = MM_CELLS[level*3 + 0];
@@ -408,23 +431,19 @@ class MCFMM_MM(MCCommon):
                 for( int ox=0 ; ox<IL_NO ; ox++){{
                     
                     
-                    const int64_t ocx = cfx + IL[ci * IL_STRIDE_OUTER + ox * 3 + 0];
-                    const int64_t ocy = cfy + IL[ci * IL_STRIDE_OUTER + ox * 3 + 1];
-                    const int64_t ocz = cfz + IL[ci * IL_STRIDE_OUTER + ox * 3 + 2];
-
-                    // free space for now
-                    if (ocx < 0) {{continue;}}
-                    if (ocy < 0) {{continue;}}
-                    if (ocz < 0) {{continue;}}
-                    if (ocx >= ncx) {{continue;}}
-                    if (ocy >= ncy) {{continue;}}
-                    if (ocz >= ncz) {{continue;}}
-
-                    const int64_t lin_ind = ocx + NCELLS_X[level] * (ocy + NCELLS_Y[level] * ocz);
-
+                    int64_t ocx = cfx + IL[ci * IL_STRIDE_OUTER + ox * 3 + 0];
+                    int64_t ocy = cfy + IL[ci * IL_STRIDE_OUTER + ox * 3 + 1];
+                    int64_t ocz = cfz + IL[ci * IL_STRIDE_OUTER + ox * 3 + 2];
+ 
                     const double dx = rx - ((-HEX) + (0.5 * wx) + (ocx * wx));
                     const double dy = ry - ((-HEY) + (0.5 * wy) + (ocy * wy));
                     const double dz = rz - ((-HEZ) + (0.5 * wz) + (ocz * wz));
+
+                    {BC_BLOCK}
+
+                    const int64_t lin_ind = ocx + NCELLS_X[level] * (ocy + NCELLS_Y[level] * ocz);
+
+
 
                     const double xy2 = dx * dx + dy * dy;
                     const double radius = sqrt(xy2 + dz * dz);
@@ -484,6 +503,7 @@ class MCFMM_MM(MCCommon):
         }}
 
         '''.format(
+            BC_BLOCK=bc_block,
             SPH_GEN=str(sph_gen.module),
             ASSIGN_GEN=str(assign_gen),
             R=self.R,

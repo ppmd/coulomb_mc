@@ -323,7 +323,6 @@ class DirectCommon(MCCommon):
                     INT64 ocy = CIY + NNMAP[ox * 3 + 1];
                     INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
                     
-                    INT64 ocf = ABS(ocx) + ABS(ocy) + ABS(ocz);
 
                     REAL pbcx = 0.0;
                     REAL pbcy = 0.0;
@@ -349,7 +348,7 @@ class DirectCommon(MCCommon):
 
                         const REAL r2 = dx*dx + dy*dy + dz*dz;
 
-                        const bool same_id = (MODE > 0) || ( (MODE < 1) && (idi != idj) && (ocf == 0) );
+                        const bool same_id = (MODE > 0) || ( (MODE < 1) && (idi != idj));
                         UTMP += (same_id) ? qj / sqrt(r2) : 0.0;
                     
                     }}

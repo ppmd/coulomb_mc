@@ -424,7 +424,6 @@ class MCCommon:
             
             REAL tmpu1 = (accept_flag < 1) ? self_contributon(old_position, new_position, charge) : 0.0 ;
 
-            printf("lr contrib %f, self interaction %f\n", tmpu0, tmpu1);
             
             *return_energy = -1.0 * tmpu0 + tmpu1;
 
