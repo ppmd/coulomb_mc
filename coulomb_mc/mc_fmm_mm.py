@@ -27,6 +27,8 @@ class MCFMM_MM(MCCommon):
 
     def __init__(self, positions, charges, domain, boundary_condition, r, l):
 
+
+        assert boundary_condition in ('free_space', 'pbc')
         self.positions = positions
         self.charges = charges
         self.domain = domain
@@ -38,6 +40,9 @@ class MCFMM_MM(MCCommon):
         self.group = self.positions.group
 
         self.mm = mm.PyMM(positions, charges, domain, boundary_condition, r, l)
+        self.solver = self.mm
+
+        self.sph_gen = self.mm.sph_gen
 
         self.energy = None
 
@@ -52,6 +57,10 @@ class MCFMM_MM(MCCommon):
 
         self.tree = None
 
+        if self.boundary_condition == BCType.PBC:
+            self.lrc = self.mm.lrc
+            self._init_lr_correction_libs()
+
 
     def initialise(self):
         N = self.positions.npart_local
@@ -62,6 +71,11 @@ class MCFMM_MM(MCCommon):
         self.energy = self.mm(self.positions, self.charges)
         self.direct.initialise()
         self.tree = self.mm.tree[:].copy()
+
+        if self.boundary_condition == BCType.PBC:
+            self.mvector = self.solver.mvector.copy()
+            self.evector = self.solver.evector.copy()
+            self.lr_energy = self.solver.lr_energy
 
 
     def propose(self, move):

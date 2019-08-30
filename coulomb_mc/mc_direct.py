@@ -233,9 +233,15 @@ class DirectCommon(MCCommon):
 
         elif bc in (BCType.PBC, BCType.NEAREST):
             bc_block = r'''
-                ocx %= LCX;
-                ocy %= LCY;
-                ocz %= LCZ;
+                
+                pbcx = (ocx < 0) ? -1.0 * EX : ( (ocx >= LCX) ? EX : 0.0 ); 
+                pbcy = (ocy < 0) ? -1.0 * EY : ( (ocy >= LCX) ? EY : 0.0 ); 
+                pbcz = (ocz < 0) ? -1.0 * EZ : ( (ocz >= LCX) ? EZ : 0.0 ); 
+
+
+                ocx = (ocx + LCX) % LCX;
+                ocy = (ocy + LCY) % LCY;
+                ocz = (ocz + LCZ) % LCZ;
             '''
         else:
             raise RuntimeError('Unknown or not implemented boundary condition.')
@@ -317,6 +323,12 @@ class DirectCommon(MCCommon):
                     INT64 ocy = CIY + NNMAP[ox * 3 + 1];
                     INT64 ocz = CIZ + NNMAP[ox * 3 + 2];
                     
+                    INT64 ocf = ABS(ocx) + ABS(ocy) + ABS(ocz);
+
+                    REAL pbcx = 0.0;
+                    REAL pbcy = 0.0;
+                    REAL pbcz = 0.0;
+                    
                     {BC_BLOCK}
 
                     // for each particle in the cell
@@ -331,13 +343,13 @@ class DirectCommon(MCCommon):
                         const REAL qj = Q[jx];
                         const INT64 idj = IDS[jx];
 
-                        const REAL dx = rx - rjx;
-                        const REAL dy = ry - rjy;
-                        const REAL dz = rz - rjz;
+                        const REAL dx = rx - rjx - pbcx;
+                        const REAL dy = ry - rjy - pbcy;
+                        const REAL dz = rz - rjz - pbcz;
 
                         const REAL r2 = dx*dx + dy*dy + dz*dz;
 
-                        const bool same_id = (MODE > 0) || ( (MODE < 1) && (idi != idj) );
+                        const bool same_id = (MODE > 0) || ( (MODE < 1) && (idi != idj) && (ocf == 0) );
                         UTMP += (same_id) ? qj / sqrt(r2) : 0.0;
                     
                     }}
@@ -369,10 +381,17 @@ class DirectCommon(MCCommon):
         #define LCX {LCX}
         #define LCY {LCY}
         #define LCZ {LCZ}
+        #define ABS(x) ((x) > 0 ? (x) : (-1 * (x)))
+        #define EX {EX}
+        #define EY {EY}
+        #define EZ {EZ}
         '''.format(
             LCX=self.subdivision[0] ** (self.R - 1),
             LCY=self.subdivision[1] ** (self.R - 1),
-            LCZ=self.subdivision[2] ** (self.R - 1)
+            LCZ=self.subdivision[2] ** (self.R - 1),
+            EX=str(self.domain.extent[0]),
+            EY=str(self.domain.extent[1]),
+            EZ=str(self.domain.extent[2]),
         )
 
         self._direct_contrib_lib = lib.build.simple_lib_creator(header, source)['direct_entry']

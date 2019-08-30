@@ -27,6 +27,8 @@ class MCFMM_LM(MCCommon):
 
     def __init__(self, positions, charges, domain, boundary_condition, r, l):
 
+        assert boundary_condition in ('free_space', 'pbc')
+
         self.positions = positions
         self.charges = charges
         self.domain = domain
@@ -38,6 +40,8 @@ class MCFMM_LM(MCCommon):
         self.group = self.positions.group
 
         self.lm = lm.PyLM(positions, charges, domain, boundary_condition, r, l)
+        self.sph_gen = self.lm.sph_gen
+        self.solver = self.lm
 
         self.energy = None
 
@@ -52,6 +56,12 @@ class MCFMM_LM(MCCommon):
 
         self.tree = None
 
+        
+        
+        if self.boundary_condition == BCType.PBC:
+            self.lrc = self.lm.lrc
+            self._init_lr_correction_libs()
+
 
     def initialise(self):
         N = self.positions.npart_local
@@ -62,7 +72,11 @@ class MCFMM_LM(MCCommon):
         self.energy = self.lm(self.positions, self.charges)
         self.direct.initialise()
         self.tree = self.lm.tree[:].copy()
-
+        
+        if self.boundary_condition == BCType.PBC:
+            self.mvector = self.solver.mvector.copy()
+            self.evector = self.solver.evector.copy()
+            self.lr_energy = self.solver.lr_energy
 
     def propose(self, move):
         px = int(move[0])
@@ -228,6 +242,7 @@ class MCFMM_LM(MCCommon):
         direct_contrib = self.direct.get_new_energy(ix, position)
         self._profile_inc('direct_get_new', time.time() - t0)
 
+        print("L GET NEW", "direct:", direct_contrib, "indirect:", ie.value)
 
         return ie.value + direct_contrib
 
@@ -258,7 +273,7 @@ class MCFMM_LM(MCCommon):
         direct_contrib = self.direct.get_old_energy(ix)
         self._profile_inc('direct_get_old', time.time() - t0)
 
-        # print("L GET OLD", direct_contrib, ie.value)
+        print("L GET OLD", "direct:", direct_contrib, "indirect:", ie.value)
         return ie.value + direct_contrib
 
 
@@ -280,9 +295,9 @@ class MCFMM_LM(MCCommon):
 
         elif bc in (BCType.PBC, BCType.NEAREST):
             bc_block = r'''
-                ocx %= ncx;
-                ocy %= ncx;
-                ocz %= ncx;
+                ocx = (ocx + ncx) % ncx;
+                ocy = (ocy + ncy) % ncy;
+                ocz = (ocz + ncz) % ncz;
             '''
         else:
             raise RuntimeError('Unknown or not implemented boundary condition.')
@@ -700,8 +715,6 @@ class MCFMM_LM(MCCommon):
             '#include <math.h>\n#include <chrono>\n#include <stdio.h>', 
             src
         )['indirect_accept']
-
-
 
 
 
