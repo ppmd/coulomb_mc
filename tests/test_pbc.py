@@ -1,9 +1,9 @@
-
+import pytest
 import numpy as np
-from coulomb_mc import mc_fmm, mc_fmm_lm
+from coulomb_mc import mc_fmm, mc_fmm_lm, mc_fmm_mm
 from ppmd import *
 
-from coulomb_kmc import kmc_direct
+from coulomb_kmc import kmc_direct, kmc_fmm
 import math
 
 import ctypes
@@ -11,58 +11,12 @@ import ctypes
 INT64 = ctypes.c_int64
 REAL = ctypes.c_double
 
-def test_free_space_1():
+@pytest.mark.parametrize("MM_LM", (mc_fmm_lm.MCFMM_LM, mc_fmm_mm.MCFMM_MM))
+def test_pbc_1(MM_LM):
 
     N = 100
     e = 10.
     R = 4
-    L = 12
-
-
-    rng = np.random.RandomState(3418)
-
-    A = state.State()
-    A.domain = domain.BaseDomainHalo(extent=(e, e, e))
-    A.domain.boundary_condition = domain.BoundaryTypePeriodic()
-
-
-    A.P = data.PositionDat()
-    A.Q = data.ParticleDat(ncomp=1)
-
-    
-    pi = np.array(rng.uniform(low=-0.5*e, high=0.5*e, size=(N, 3)), REAL)
-    qi = np.array(rng.uniform(low=-1, high=1, size=(N, 1)), REAL)
-
-    with A.modify() as m:
-        m.add({
-            A.P: pi,
-            A.Q: qi,
-        })
-
-
-    MC = mc_fmm_lm.MCFMM_LM(A.P, A.Q, A.domain, 'free_space', R, L)
-
-    MC.initialise()
-
-    DFS = kmc_direct.FreeSpaceDirect()
-
-    correct = DFS(N, A.P.view, A.Q.view)
-
-    err = abs(MC.energy - correct) / abs(correct)
-    assert err < 10.**-6
-
-
-
-
-
-
-
-
-def test_free_space_2():
-
-    N = 100
-    e = 10.
-    R = 5
     L = 16
 
 
@@ -75,11 +29,13 @@ def test_free_space_2():
 
     A.P = data.PositionDat()
     A.Q = data.ParticleDat(ncomp=1)
-    A.U = data.ParticleDat(ncomp=1)
 
     
     pi = np.array(rng.uniform(low=-0.5*e, high=0.5*e, size=(N, 3)), REAL)
     qi = np.array(rng.uniform(low=-1, high=1, size=(N, 1)), REAL)
+    bias = np.sum(qi) / N
+    qi -= bias
+
 
     with A.modify() as m:
         m.add({
@@ -88,33 +44,20 @@ def test_free_space_2():
         })
 
 
-    MC = mc_fmm_lm.MCFMM_LM(A.P, A.Q, A.domain, 'free_space', R, L)
+    MC = MM_LM(A.P, A.Q, A.domain, 'pbc', R, L)
 
     MC.initialise()
-    
-    FMM = coulomb.fmm.PyFMM(A.domain, r=R, l=L, free_space=True)
 
-    FMM(A.P, A.Q, potential=A.U)
+    DFS = kmc_direct.PBCDirect(e, A.domain, L)
 
+    correct = DFS(N, A.P.view, A.Q.view)
 
-    for px in range(N):
-
-        to_test = MC._get_old_energy(px)
-        
-        correct = A.U[px, 0]
-
-        err = abs(to_test - correct) / abs(correct)
-        
-        assert err < 3 * 10.**-6
+    err = abs(MC.energy - correct) / abs(correct)
+    assert err < 10.**-6
 
 
-
-
-
-
-
-
-def test_free_space_3():
+@pytest.mark.parametrize("MM_LM", (mc_fmm_lm.MCFMM_LM, mc_fmm_mm.MCFMM_MM))
+def test_pbc_2(MM_LM):
 
     N = 100
     e = 10.
@@ -136,6 +79,9 @@ def test_free_space_3():
     
     pi = np.array(rng.uniform(low=-0.5*e, high=0.5*e, size=(N, 3)), REAL)
     qi = np.array(rng.uniform(low=-1, high=1, size=(N, 1)), REAL)
+    bias = np.sum(qi) / N
+    qi -= bias
+
     gi = np.arange(N).reshape((N, 1))
 
     with A.modify() as m:
@@ -146,20 +92,17 @@ def test_free_space_3():
         })
 
 
-    MC = mc_fmm_lm.MCFMM_LM(A.P, A.Q, A.domain, 'free_space', R, L)
-    
+    MC = MM_LM(A.P, A.Q, A.domain, 'pbc', R, L)
     MC.initialise()
 
+    KMC = kmc_fmm.KMCFMM(A.P, A.Q, A.domain, boundary_condition='pbc', l=L, r=R)
+    KMC.initialise()
+    
 
-
-    DFS = kmc_direct.FreeSpaceDirect()
-
-    correct = DFS(N, A.P.view, A.Q.view)
-
+    correct = KMC.energy
     err = abs(MC.energy - correct) / abs(correct)
     assert err < 10.**-5
 
-    
     for testx in range(100):
 
         gid = rng.randint(0, N)
@@ -170,37 +113,25 @@ def test_free_space_3():
 
         e0 = MC.propose((lid, pos.copy())) + MC.energy
 
-
-        old_pos = pi[gid, :].copy()
-        pi[gid, :] = pos.copy()
-
-        correct = DFS(N, pi, qi)
-
-        #te = 0.0
-        #for px in range(N):
-        #    te += get_old_energy(N, px, pi, qi)
-        #te *= 0.5
-        #print("te", te)
+        correct = KMC.propose(((lid, pos.copy()),))[0]
 
 
-        pi[gid, :] = old_pos.copy()
-
-        
-        #print("\t==>", get_old_energy(N, lid, pi, qi), get_new_energy(N, lid, pi, qi, pos), get_self_energy(qi[gid, 0], old_pos, pos))
         
         err = abs(correct - e0) / abs(correct)
-        #print(err, correct, e0)
         assert err < 10.**-5
 
+    
+    KMC.free()
+    MC.free()
 
 
-def test_free_space_4():
+@pytest.mark.parametrize("MM_LM", (mc_fmm_lm.MCFMM_LM, mc_fmm_mm.MCFMM_MM))
+def test_pbc_3(MM_LM):
 
     N = 100
     e = 10.
     R = max(4, int(math.log(4*N, 8)))
-    R = 5
-    L = 18
+    L = 16
 
 
     rng = np.random.RandomState(34118)
@@ -217,6 +148,9 @@ def test_free_space_4():
     
     pi = np.array(rng.uniform(low=-0.5*e, high=0.5*e, size=(N, 3)), REAL)
     qi = np.array(rng.uniform(low=-1, high=1, size=(N, 1)), REAL)
+    bias = np.sum(qi) / N
+    qi -= bias
+
     gi = np.arange(N).reshape((N, 1))
 
     with A.modify() as m:
@@ -227,11 +161,12 @@ def test_free_space_4():
         })
 
 
-    MC = mc_fmm_lm.MCFMM_LM(A.P, A.Q, A.domain, 'free_space', R, L)
+    MC = MM_LM(A.P, A.Q, A.domain, 'pbc', R, L)
     
     MC.initialise()
 
-    DFS = kmc_direct.FreeSpaceDirect()
+
+    DFS = kmc_direct.PBCDirect(e, A.domain, L)
 
     correct = DFS(N, A.P.view, A.Q.view)
 
@@ -273,17 +208,5 @@ def test_free_space_4():
 
 
         assert abs(MC.energy - correct) < 10**-5
-
-
-
-
-
-
-
-
-
-
-
-
 
 

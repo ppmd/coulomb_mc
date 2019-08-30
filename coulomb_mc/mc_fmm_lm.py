@@ -85,7 +85,7 @@ class MCFMM_LM(MCCommon):
         old_energy = self._get_old_energy(px)
         new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
         self_energy = self._get_self_interaction(px, pos)
-        # print("L\t-->", old_energy, new_energy, self_energy)
+        #print("L\t-->", old_energy, new_energy, self_energy)
 
         self._profile_inc('num_propose', 1)
         return new_energy - old_energy - self_energy
@@ -105,6 +105,11 @@ class MCFMM_LM(MCCommon):
             energy_diff = self.propose(move)
         
         self.energy += energy_diff
+
+        t0 = time.time()
+        self._lr_accept(px, new_pos)
+        self._profile_inc('lm_accept', time.time() - t0)
+
 
         t0 = time.time()
         self.direct.accept(move)
@@ -242,7 +247,7 @@ class MCFMM_LM(MCCommon):
         direct_contrib = self.direct.get_new_energy(ix, position)
         self._profile_inc('direct_get_new', time.time() - t0)
 
-        # print("L GET NEW", "direct:", direct_contrib, "indirect:", ie.value)
+        #print("L GET NEW", "direct:", direct_contrib, "indirect:", ie.value)
 
         return ie.value + direct_contrib
 
@@ -273,7 +278,7 @@ class MCFMM_LM(MCCommon):
         direct_contrib = self.direct.get_old_energy(ix)
         self._profile_inc('direct_get_old', time.time() - t0)
 
-        # print("L GET OLD", "direct:", direct_contrib, "indirect:", ie.value)
+        #print("L GET OLD", "direct:", direct_contrib, "indirect:", ie.value)
         return ie.value + direct_contrib
 
 
@@ -392,7 +397,7 @@ class MCFMM_LM(MCCommon):
 
             double particle_energy = 0.0;
 
-            for( int level=0 ; level<R ; level++ ){{
+            for( int level=1 ; level<R ; level++ ){{
 
                 // cell on this level
                 const int64_t cfx = MM_CELLS[level*3 + 0];
@@ -577,7 +582,7 @@ class MCFMM_LM(MCCommon):
 
 
             // compute the local expansions
-            for( int level=0 ; level<R ; level++) {{
+            for( int level=1 ; level<R ; level++) {{
                 
                 // cell on this level
                 const int64_t cfx = MM_CELLS[level * 3 + 0];

@@ -84,6 +84,43 @@ class MCCommon:
         else:
 
             raise RuntimeError('Unknown boundary condition type.')
+    
+
+    def _lr_accept(self, px, pos):
+
+        if self.boundary_condition == BCType.FREE_SPACE:
+            return
+
+        elif self.boundary_condition == BCType.PBC:
+
+            charge = self.charges[px, 0]
+            old_pos = self.positions[px, :]
+            
+            old_position = np.array((old_pos[0], old_pos[1], old_pos[2]), REAL)
+            new_position = np.array((pos[0], pos[1], pos[2]), REAL)
+
+            return_energy = REAL(0)
+
+            self._lr_si_lib(
+                INT64(1),
+                old_position.ctypes.get_as_parameter(),
+                new_position.ctypes.get_as_parameter(),
+                REAL(charge),
+                REAL(0.0),
+                self.mvector.ctypes.get_as_parameter(),
+                self.evector.ctypes.get_as_parameter(),
+                self.solver.lrc.linop_data.ctypes.get_as_parameter(),
+                self.solver.lrc.linop_indptr.ctypes.get_as_parameter(),
+                self.solver.lrc.linop_indices.ctypes.get_as_parameter(),
+                ctypes.byref(return_energy)
+            )
+            
+            self.lr_energy = -1.0 * return_energy.value
+        
+        else:
+
+            raise RuntimeError('Unknown boundary condition type.')
+
 
 
 
@@ -354,7 +391,6 @@ class MCCommon:
                     existing_evector[ix] = evector[ix];
                 }}
 
-                return 0.0;
             }}
 
 

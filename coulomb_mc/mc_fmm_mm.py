@@ -106,6 +106,12 @@ class MCFMM_MM(MCCommon):
         
         self.energy += energy_diff
 
+
+        t0 = time.time()
+        self._lr_accept(px, new_pos)
+        self._profile_inc('lr_accept', time.time() - t0)
+
+
         t0 = time.time()
         self.direct.accept(move)
         self._profile_inc('direct_accept', time.time() - t0)       
