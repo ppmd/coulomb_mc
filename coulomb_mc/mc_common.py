@@ -283,7 +283,8 @@ class MCCommon:
 
 
         src = r'''
-
+        
+        namespace LR_SI {{
 
         static inline REAL apply_dipole_correction_split(
             const REAL * RESTRICT M,
@@ -441,7 +442,7 @@ class MCCommon:
         }}
 
 
-        extern "C" int lr_self_interaction(
+        int lr_self_interaction_inner(
             const INT64             accept_flag,
             const REAL  * RESTRICT  old_position,
             const REAL  * RESTRICT  new_position,
@@ -465,7 +466,38 @@ class MCCommon:
 
             return 0;
         }}  
+        
+        }}
 
+        extern "C" int lr_self_interaction(
+            const INT64             accept_flag,
+            const REAL  * RESTRICT  old_position,
+            const REAL  * RESTRICT  new_position,
+            const REAL              charge,
+            const REAL              old_energy,
+                  REAL  * RESTRICT  existing_multipole,
+                  REAL  * RESTRICT  existing_evector,
+            const REAL  * RESTRICT  linop_data,
+            const INT64 * RESTRICT  linop_indptr,
+            const INT64 * RESTRICT  linop_indices,
+                  REAL  * RESTRICT  return_energy
+        ) {{
+
+            return LR_SI::lr_self_interaction_inner(
+                accept_flag,
+                old_position,
+                new_position,
+                charge,
+                old_energy,
+                existing_multipole,
+                existing_evector,
+                linop_data,
+                linop_indptr,
+                linop_indices,
+                return_energy
+            );
+
+        }}
 
 
         '''.format(
@@ -500,16 +532,214 @@ class MCCommon:
                 Define('EZ', self.domain.extent[2]),
             ))
         )
+        
+        header_post = '''
+            #undef NCOMP
+            #undef HALF_NCOMP
+            #undef DIPOLE_SX
+            #undef DIPOLE_SY
+            #undef DIPOLE_SZ
+            #undef RE_1P1
+            #undef RE_1_0
+            #undef RE_1N1
+            #undef IM_1P1
+            #undef IM_1_0
+            #undef DOMAIN_27_ENERGY
+            #undef IM_1N1
+            #undef EX
+            #undef EY
+            #undef EZ
+        '''
+        
+        src = header + src + header_post
+
+        self._lr_si_lib = lib.build.simple_lib_creator(header_code='', src_code=src)['lr_self_interaction']
+
+        self.lib_sl_source = src
 
 
-        self._lr_si_lib = lib.build.simple_lib_creator(header_code=header, src_code=src)['lr_self_interaction']
+        self.lib_sl_parameters = [
+            'const INT64             LR_SI_accept_flag',
+            'const REAL  * RESTRICT  LR_SI_old_position',
+            'const REAL  * RESTRICT  LR_SI_new_position',
+            'const REAL              LR_SI_charge',
+            'const REAL              LR_SI_old_energy',
+            '      REAL  * RESTRICT  LR_SI_existing_multipole',
+            '      REAL  * RESTRICT  LR_SI_existing_evector',
+            'const REAL  * RESTRICT  LR_SI_linop_data',
+            'const INT64 * RESTRICT  LR_SI_linop_indptr',
+            'const INT64 * RESTRICT  LR_SI_linop_indices',
+            '      REAL  * RESTRICT  LR_SI_return_energy',
+        ]
+
+        self.lib_sl_call = '''
+        return LR_SI::lr_self_interaction_inner(
+            LR_SI_accept_flag,
+            LR_SI_old_position,
+            LR_SI_new_position,
+            LR_SI_charge,
+            LR_SI_old_energy,
+            LR_SI_existing_multipole,
+            LR_SI_existing_evector,
+            LR_SI_linop_data,
+            LR_SI_linop_indptr,
+            LR_SI_linop_indices,
+            LR_SI_return_energy
+        );
+        '''
+
+        if not (self.boundary_condition == BCType.PBC):
+            self.lib_sl_parameters = []
+            self.lib_sl_call = ''
 
 
+    def get_lib_sl_combined_args(self, px, pos, energy):
+        
+
+        if not (self.boundary_condition == BCType.PBC):
+            return [], [None,]
+
+        charge = self.charges[px, 0]
+        old_pos = self.positions[px, :]
+
+        old_position = np.array((old_pos[0], old_pos[1], old_pos[2]), REAL)
+        new_position = np.array((pos[0], pos[1], pos[2]), REAL)
+
+        args = [
+            INT64(0),
+            old_position.ctypes.get_as_parameter(),
+            new_position.ctypes.get_as_parameter(),
+            REAL(charge),
+            REAL(self.lr_energy),
+            self.mvector.ctypes.get_as_parameter(),
+            self.evector.ctypes.get_as_parameter(),
+            self.solver.lrc.linop_data.ctypes.get_as_parameter(),
+            self.solver.lrc.linop_indptr.ctypes.get_as_parameter(),
+            self.solver.lrc.linop_indices.ctypes.get_as_parameter(),
+            ctypes.byref(energy)
+        ]
+        
+
+        return args, (old_position, new_position)
+
+    
+    def _init_single_propose_lib(self):
+        
+
+        header = ''
+        
+
+        src = r'''
+        #include <cstdint>
+        #define REAL double
+        #define INT64 int64_t
+        '''
+
+        src += self.direct.lib_source
+        if self.boundary_condition == BCType.PBC:
+            src += self.lib_sl_source
+        src += self.lib_source
 
 
+        parameters = []
+        parameters += self.direct.lib_parameters
+        parameters += self.lib_parameters
+
+        if self.boundary_condition == BCType.PBC:
+            parameters += self.lib_sl_parameters
 
 
+        call = ''
 
+        call += self.direct.lib_call_old
+        call += self.lib_call_old
+        call += self.direct.lib_call_new
+        call += self.lib_call_new
+        if self.boundary_condition == BCType.PBC:
+            call += self.lib_sl_call
+
+        parameters = ',\n'.join(parameters)
+
+        src += r'''
+        
+        extern "C" int propose_entry_point(
+            {PARAMETERS}
+        ){{
+            
+            {CALL}
+
+            return 0;
+        }}
+        '''.format(
+            PARAMETERS=parameters,
+            CALL=call
+        )
+
+        self._single_propose_lib = lib.build.simple_lib_creator('', src)['propose_entry_point']
+
+
+    def _single_propose(self, px, pos):
+        
+        args = []
+        tmps = []
+        
+        # direct lib
+        old_energy_direct = REAL(0)
+        new_energy_direct = REAL(0)
+        argt, tmpt = self.direct.get_lib_combined_args(px, pos, old_energy_direct, new_energy_direct)
+        args += argt
+        tmps += tmpt
+
+        # indirect lib
+        old_energy_indirect = REAL(0)
+        new_energy_indirect = REAL(0)
+
+        old_time_indirect = REAL(0)
+        new_time_indirect = REAL(0)
+
+        argt, tmpt = self.get_lib_combined_args(
+            px, pos, old_energy_indirect, new_energy_indirect, old_time_indirect, new_time_indirect)
+        args += argt
+        tmps += tmpt
+
+        # SI LR lib
+        si_lr_energy = REAL(0)
+        argt, tmpt = self.get_lib_sl_combined_args(px, pos, si_lr_energy)
+        args += argt
+        tmps += tmpt
+
+        self._single_propose_lib(*args)
+        
+        nd = new_energy_direct.value
+        ni = new_energy_indirect.value
+        od = old_energy_direct.value
+        oi = old_energy_indirect.value
+        sl = si_lr_energy.value
+
+
+        return (nd + ni) - (od + oi) - sl
+
+
+    def propose(self, move, use_one_call=True):
+
+        px = int(move[0])
+        pos = move[1]
+        self._inc_prop_count()
+
+        if use_one_call:
+            combined  = self._single_propose(px, pos)
+
+            if self.boundary_condition == BCType.FREE_SPACE:
+                combined -= self._get_self_interaction(px, pos)
+
+        else:
+            old_energy = self._get_old_energy(px)
+            new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
+            self_energy = self._get_self_interaction(px, pos)
+            combined = new_energy - old_energy - self_energy
+
+
+        return combined
 
 
 

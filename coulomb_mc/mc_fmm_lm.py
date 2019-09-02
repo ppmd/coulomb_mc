@@ -55,12 +55,12 @@ class MCFMM_LM(MCCommon):
         self._init_libs()
 
         self.tree = None
-
-        
         
         if self.boundary_condition == BCType.PBC:
             self.lrc = self.lm.lrc
             self._init_lr_correction_libs()
+
+        self._init_single_propose_lib()
 
 
     def initialise(self):
@@ -68,9 +68,14 @@ class MCFMM_LM(MCCommon):
         g = self.positions.group
         with g._mc_lm_ids.modify_view() as mv:
             mv[:, 0] = np.arange(N)
-
+        
+        t0 = time.time()
         self.energy = self.lm(self.positions, self.charges)
+        self._profile_inc('initialise_solve', time.time() - t0)
+
+        t0 = time.time()
         self.direct.initialise()
+        self._profile_inc('initialise_direct_initialise', time.time() - t0)
         self.tree = self.lm.tree[:].copy()
         
         if self.boundary_condition == BCType.PBC:
@@ -78,17 +83,8 @@ class MCFMM_LM(MCCommon):
             self.evector = self.solver.evector.copy()
             self.lr_energy = self.solver.lr_energy
 
-    def propose(self, move):
-        px = int(move[0])
-        pos = move[1]
-
-        old_energy = self._get_old_energy(px)
-        new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
-        self_energy = self._get_self_interaction(px, pos)
-        #print("L\t-->", old_energy, new_energy, self_energy)
-
+    def _inc_prop_count(self):
         self._profile_inc('num_propose', 1)
-        return new_energy - old_energy - self_energy
 
     
     def accept(self, move, energy_diff=None):
@@ -347,6 +343,10 @@ class MCFMM_LM(MCCommon):
 
         src = r'''
         
+        #include <math.h>
+        #include <chrono>
+        #include <stdio.h>
+
         #define REAL double
         #define INT64 int64_t
         #define R                    {R}
@@ -370,6 +370,8 @@ class MCFMM_LM(MCCommon):
         #define NCOMP                {NCOMP}
         #define IM_OFFSET            {IM_OFFSET}
         #define THREE_R              {THREE_R}
+    
+        namespace INDIRECT {{
 
         const REAL WIDTHS_X[R] = {{ {WIDTHS_X} }};
         const REAL WIDTHS_Y[R] = {{ {WIDTHS_Y} }};
@@ -440,7 +442,7 @@ class MCFMM_LM(MCCommon):
 
 
 
-        extern "C" int get_energy(
+        int get_energy(
             const INT64            IX,
             const REAL  * RESTRICT P,
             const REAL  * RESTRICT Q,
@@ -468,6 +470,56 @@ class MCFMM_LM(MCCommon):
                 
             return 0;
         }}
+
+        }}
+
+
+        extern "C" int get_indirect_energy(
+            const INT64            IX,
+            const REAL  * RESTRICT P,
+            const REAL  * RESTRICT Q,
+            const INT64 * RESTRICT MM_CELLS,
+            const INT64 * RESTRICT MM_CHILD_INDEX,
+            const REAL  * RESTRICT TREE,
+                  REAL  * RESTRICT OUT_ENERGY,
+                  REAL  * RESTRICT TIME_TAKEN
+        ){{
+
+
+        return INDIRECT::get_energy(
+            IX,
+            P,
+            Q,
+            MM_CELLS,
+            MM_CHILD_INDEX,
+            TREE,
+            OUT_ENERGY,
+            TIME_TAKEN
+        );
+
+        }}
+
+        #undef R                 
+        #undef EX                
+        #undef EY                
+        #undef EZ                
+        #undef HEX               
+        #undef HEY               
+        #undef HEZ               
+        #undef CWX               
+        #undef CWY               
+        #undef CWZ               
+        #undef LCX               
+        #undef LCY               
+        #undef LCZ               
+        #undef SDX               
+        #undef SDY               
+        #undef SDZ               
+        #undef IL_NO             
+        #undef IL_STRIDE_OUTER   
+        #undef NCOMP             
+        #undef IM_OFFSET         
+        #undef THREE_R
 
         '''.format(
             SPH_GEN=str(sph_gen.module),
@@ -502,15 +554,60 @@ class MCFMM_LM(MCCommon):
             LEVEL_OFFSETS=self.lm.level_offsets_str
         )
 
-        self._indirect_lib = lib.build.simple_lib_creator(
-            '#include <math.h>\n#include <chrono>\n#include<stdio.h>',
-            src
-        )['get_energy']
+        self._indirect_lib = lib.build.simple_lib_creator('', src)['get_indirect_energy']
         
 
         # =============================================================================================================
 
 
+        self.lib_source = src
+
+        self.lib_parameters = [
+            'const REAL  * RESTRICT INDIRECT_TREE',
+            'const INT64            INDIRECT_OLD_IX',
+            'const REAL  * RESTRICT INDIRECT_OLD_P',
+            'const REAL  * RESTRICT INDIRECT_OLD_Q',
+            'const INT64 * RESTRICT INDIRECT_OLD_MM_CELLS',
+            'const INT64 * RESTRICT INDIRECT_OLD_MM_CHILD_INDEX',
+            '      REAL  * RESTRICT INDIRECT_OLD_OUT_ENERGY',
+            '      REAL  * RESTRICT INDIRECT_OLD_TIME_TAKEN',
+            'const INT64            INDIRECT_NEW_IX',
+            'const REAL  * RESTRICT INDIRECT_NEW_P',
+            'const REAL  * RESTRICT INDIRECT_NEW_Q',
+            'const INT64 * RESTRICT INDIRECT_NEW_MM_CELLS',
+            'const INT64 * RESTRICT INDIRECT_NEW_MM_CHILD_INDEX',
+            '      REAL  * RESTRICT INDIRECT_NEW_OUT_ENERGY',
+            '      REAL  * RESTRICT INDIRECT_NEW_TIME_TAKEN',
+        ]
+
+        
+        self.lib_call_old = '''
+        INDIRECT::get_energy(
+            INDIRECT_OLD_IX,
+            INDIRECT_OLD_P,
+            INDIRECT_OLD_Q,
+            INDIRECT_OLD_MM_CELLS,
+            INDIRECT_OLD_MM_CHILD_INDEX,
+            INDIRECT_TREE,
+            INDIRECT_OLD_OUT_ENERGY,
+            INDIRECT_OLD_TIME_TAKEN
+        );
+        '''
+
+        self.lib_call_new = '''
+        INDIRECT::get_energy(
+            INDIRECT_NEW_IX,
+            INDIRECT_NEW_P,
+            INDIRECT_NEW_Q,
+            INDIRECT_NEW_MM_CELLS,
+            INDIRECT_NEW_MM_CHILD_INDEX,
+            INDIRECT_TREE,
+            INDIRECT_NEW_OUT_ENERGY,
+            INDIRECT_NEW_TIME_TAKEN
+        );
+        '''
+
+        # =============================================================================================================
 
 
 
@@ -723,5 +820,38 @@ class MCFMM_LM(MCCommon):
             src
         )['indirect_accept']
 
+
+
+    def get_lib_combined_args(self, ix, position, old_energy, new_energy, old_time_taken, new_time_taken):
+
+
+        ie = REAL(0)
+        
+        position = np.array((position[0], position[1], position[2]), REAL)
+        charge = REAL(self.charges[ix,0])
+        
+        new_cell, mm_cells, mm_child_index = self._get_new_cells(position)
+        
+
+        args = [
+            self.tree.ctypes.get_as_parameter(),
+            INT64(ix),
+            self.sh.get_pointer(self.positions(access.READ)),
+            self.sh.get_pointer(self.charges(access.READ)),
+            self.sh.get_pointer(self.group._lm_cells(access.READ)),
+            self.sh.get_pointer(self.group._lm_child_index(access.READ)),
+            ctypes.byref(old_energy),
+            ctypes.byref(old_time_taken),
+            INT64(0),
+            position.ctypes.get_as_parameter(),
+            ctypes.byref(charge),
+            mm_cells.ctypes.get_as_parameter(),
+            mm_child_index.ctypes.get_as_parameter(),
+            ctypes.byref(new_energy),
+            ctypes.byref(new_time_taken)
+        ]
+
+        assert len(args) == len(self.lib_parameters)
+        return args, (new_cell, mm_cells, mm_child_index)
 
 
