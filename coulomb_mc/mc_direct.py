@@ -98,6 +98,8 @@ class DirectCommon(MCCommon):
         index_c = INT64(px)
         
         t0 = time.time()
+
+        time_direct = REAL(0)
         self._direct_contrib_lib(
             INT64(0),                         #// -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
             INT64(1),                          #//number of contributions to compute
@@ -113,11 +115,13 @@ class DirectCommon(MCCommon):
             self.il_earray.ctypes.get_as_parameter(),
             ctypes.byref(REAL()),
             ctypes.byref(INT64()),
-            ctypes.byref(energy_pc)
+            ctypes.byref(energy_pc),
+            ctypes.byref(time_direct)
         )
         energy_c = energy_pc.value
         energy += energy_c
         self._profile_inc('direct_old', time.time() - t0)
+        self._profile_inc('direct_old_inner', time_direct.value)
 
         return energy
     
@@ -135,6 +139,8 @@ class DirectCommon(MCCommon):
         index_c = INT64(px)
         tpos = np.array((pos[0], pos[1], pos[2]), REAL)
         tcell = np.array(cell, INT64)
+
+        time_direct = REAL(0)
         self._direct_contrib_lib(
             INT64(1),                         #// -1 for "all old contribs (does not use id array)", 0 for indexed old contribs, 1 for new contribs
             INT64(1),                          #//number of contributions to compute
@@ -150,11 +156,13 @@ class DirectCommon(MCCommon):
             self.il_earray.ctypes.get_as_parameter(),
             tpos.ctypes.get_as_parameter(),
             tcell.ctypes.get_as_parameter(),
-            ctypes.byref(energy_pc)
+            ctypes.byref(energy_pc),
+            ctypes.byref(time_direct)
         )
         energy_c = energy_pc.value
         energy += energy_c
         self._profile_inc('direct_new', time.time() - t0)
+        self._profile_inc('direct_new_inner', time_direct.value)
 
         return energy
 
@@ -266,9 +274,12 @@ class DirectCommon(MCCommon):
             const INT64 * RESTRICT NNMAP,       //nearest neighbour offsets
             const REAL * RESTRICT NEW_POS,      //new position if MODE == 1
             const INT64 * RESTRICT NEW_CELL,    //new cells if MODE == 1
-            REAL * RESTRICT U                   //output energy array
+            REAL * RESTRICT U,                  //output energy array
+            REAL * RESTRICT TIME_TAKEN
         ){{
             
+            std::chrono::high_resolution_clock::time_point _loop_timer_t0 = std::chrono::high_resolution_clock::now();
+
             REAL UTOTAL = 0.0;
 
             for(INT64 px=0 ; px<n ; px++){{
@@ -315,7 +326,7 @@ class DirectCommon(MCCommon):
                 const INT64 idi = IDS[ix];
                 
                 //for each offset
-
+                #pragma omp parallel for reduction(+:UTMP)
                 for(INT64 ox=0 ; ox<noffsets ; ox++){{
                     
                     INT64 ocx = CIX + NNMAP[ox * 3 + 0];
@@ -365,6 +376,10 @@ class DirectCommon(MCCommon):
                 U[0] = UTOTAL;
             }}
 
+            std::chrono::high_resolution_clock::time_point _loop_timer_t1 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> _loop_timer_res = _loop_timer_t1 - _loop_timer_t0;
+            *TIME_TAKEN = (double) _loop_timer_res.count();
+
             return 0;
         }}
 
@@ -385,7 +400,8 @@ class DirectCommon(MCCommon):
             const INT64 * RESTRICT  NNMAP,   
             const REAL  * RESTRICT  NEW_POS,  
             const INT64 * RESTRICT  NEW_CELL,
-                  REAL  * RESTRICT  U               
+                  REAL  * RESTRICT  U, 
+                  REAL  * RESTRICT  TIME_TAKEN              
         ){{
             return DIRECTLIB::direct_inner(
                 MODE,      
@@ -402,7 +418,8 @@ class DirectCommon(MCCommon):
                 NNMAP,     
                 NEW_POS,   
                 NEW_CELL,  
-                U          
+                U,
+                TIME_TAKEN
             );
         }}
 
@@ -412,6 +429,7 @@ class DirectCommon(MCCommon):
         )
 
         header_pre = r'''
+        #include <chrono>
         #include <math.h>
         #include <stdio.h>
         #define REAL double
@@ -464,7 +482,9 @@ class DirectCommon(MCCommon):
             'const REAL  * RESTRICT  DIRECT_NEW_POS',
             'const INT64 * RESTRICT  DIRECT_NEW_CELL',
             '      REAL  * RESTRICT  DIRECT_U_OLD',
-            '      REAL  * RESTRICT  DIRECT_U_NEW', 
+            '      REAL  * RESTRICT  DIRECT_U_NEW',
+            '      REAL  * RESTRICT  DIRECT_TIME_OLD',
+            '      REAL  * RESTRICT  DIRECT_TIME_NEW',
         ]
 
         self.lib_call_old = '''
@@ -483,7 +503,8 @@ class DirectCommon(MCCommon):
             DIRECT_NNMAP,     
             DIRECT_NEW_POS,   
             DIRECT_NEW_CELL,  
-            DIRECT_U_OLD
+            DIRECT_U_OLD,
+            DIRECT_TIME_OLD
         );
         '''
 
@@ -503,12 +524,13 @@ class DirectCommon(MCCommon):
             DIRECT_NNMAP,     
             DIRECT_NEW_POS,   
             DIRECT_NEW_CELL,  
-            DIRECT_U_NEW
+            DIRECT_U_NEW,
+            DIRECT_TIME_NEW
         );
         '''
 
 
-    def get_lib_combined_args(self, px, pos, old_energy, new_energy):
+    def get_lib_combined_args(self, px, pos, old_energy, new_energy, old_time_taken, new_time_taken):
 
         cell = self._get_cell(pos)
 
@@ -532,6 +554,8 @@ class DirectCommon(MCCommon):
             tcell.ctypes.get_as_parameter(),
             ctypes.byref(old_energy),
             ctypes.byref(new_energy),
+            ctypes.byref(old_time_taken),
+            ctypes.byref(new_time_taken)
         ]
 
         assert len(args) == len(self.lib_parameters)

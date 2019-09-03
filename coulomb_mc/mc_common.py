@@ -573,7 +573,7 @@ class MCCommon:
         ]
 
         self.lib_sl_call = '''
-        return LR_SI::lr_self_interaction_inner(
+        LR_SI::lr_self_interaction_inner(
             LR_SI_accept_flag,
             LR_SI_old_position,
             LR_SI_new_position,
@@ -648,25 +648,44 @@ class MCCommon:
         if self.boundary_condition == BCType.PBC:
             parameters += self.lib_sl_parameters
 
-
+        
+        call_elements = (
+            self.direct.lib_call_old,
+            self.lib_call_old,
+            self.direct.lib_call_new,
+            self.lib_call_new,
+        )
         call = ''
 
-        call += self.direct.lib_call_old
-        call += self.lib_call_old
-        call += self.direct.lib_call_new
-        call += self.lib_call_new
+        for cx in call_elements:
+            call += '''
+            #pragma omp master
+            {{
+            #pragma omp task
+            {{
+                {CX}
+            }}
+            }}
+
+            '''.format(CX=cx)
+
+
         if self.boundary_condition == BCType.PBC:
             call += self.lib_sl_call
 
         parameters = ',\n'.join(parameters)
 
         src += r'''
+        #include <omp.h>
         
         extern "C" int propose_entry_point(
             {PARAMETERS}
         ){{
             
-            {CALL}
+            #pragma omp parallel
+            {{
+                {CALL}
+            }}
 
             return 0;
         }}
@@ -686,7 +705,12 @@ class MCCommon:
         # direct lib
         old_energy_direct = REAL(0)
         new_energy_direct = REAL(0)
-        argt, tmpt = self.direct.get_lib_combined_args(px, pos, old_energy_direct, new_energy_direct)
+
+        old_time_direct = REAL(0)
+        new_time_direct = REAL(0)
+
+        argt, tmpt = self.direct.get_lib_combined_args(
+            px, pos, old_energy_direct, new_energy_direct, old_time_direct, new_time_direct)
         args += argt
         tmps += tmpt
 
@@ -716,6 +740,7 @@ class MCCommon:
         oi = old_energy_indirect.value
         sl = si_lr_energy.value
 
+        self._update_profiling(old_time_direct, old_time_indirect, new_time_direct, new_time_indirect)
 
         return (nd + ni) - (od + oi) - sl
 

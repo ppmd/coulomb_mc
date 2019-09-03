@@ -87,6 +87,13 @@ class MCFMM_MM(MCCommon):
     def _inc_prop_count(self):
         self._profile_inc('num_propose', 1)   
 
+    def _update_profiling(self, old_time_direct, old_time_indirect, new_time_direct, new_time_indirect):
+
+        self._profile_inc('direct_new_inner', new_time_direct)
+        self._profile_inc('direct_old_inner', old_time_direct)
+        self._profile_inc('indirect_new_inner', new_time_indirect)
+        self._profile_inc('indirect_old_inner', old_time_indirect)
+
     def accept(self, move, energy_diff=None):
         
 

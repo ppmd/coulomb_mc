@@ -86,6 +86,13 @@ class MCFMM_LM(MCCommon):
     def _inc_prop_count(self):
         self._profile_inc('num_propose', 1)
 
+
+    def _update_profiling(self, old_time_direct, old_time_indirect, new_time_direct, new_time_indirect):
+
+        self._profile_inc('direct_new_inner', new_time_direct)
+        self._profile_inc('direct_old_inner', old_time_direct)
+        self._profile_inc('indirect_new_inner', new_time_indirect)
+        self._profile_inc('indirect_old_inner', old_time_indirect)
     
     def accept(self, move, energy_diff=None):
         
@@ -679,32 +686,33 @@ class MCFMM_LM(MCCommon):
 
 
             // compute the local expansions
+            #pragma omp parallel for collapse(2)
             for( int level=1 ; level<R ; level++) {{
-                
-                // cell on this level
-                const int64_t cfx = MM_CELLS[level * 3 + 0];
-                const int64_t cfy = MM_CELLS[level * 3 + 1];
-                const int64_t cfz = MM_CELLS[level * 3 + 2];
-
-                // child on this level
-                const int64_t cix = cfx % SDX;
-                const int64_t ciy = cfy % SDY;
-                const int64_t ciz = cfz % SDZ;
-                const int64_t ci = cix + SDX * (ciy + SDY * ciz);
-
-                // cell widths on this level
-                const double wx = WIDTHS_X[level];
-                const double wy = WIDTHS_Y[level];
-                const double wz = WIDTHS_Z[level];
-
-                // number of cells on this level
-                const int64_t ncx = NCELLS_X[level];
-                const int64_t ncy = NCELLS_Y[level];
-                const int64_t ncz = NCELLS_Z[level];
-
-
-                // loop over IL for this child cell
+                 // loop over IL for this child cell
                 for( int ox=0 ; ox<IL_NO ; ox++){{
+
+                    // cell on this level
+                    const int64_t cfx = MM_CELLS[level * 3 + 0];
+                    const int64_t cfy = MM_CELLS[level * 3 + 1];
+                    const int64_t cfz = MM_CELLS[level * 3 + 2];
+
+                    // child on this level
+                    const int64_t cix = cfx % SDX;
+                    const int64_t ciy = cfy % SDY;
+                    const int64_t ciz = cfz % SDZ;
+                    const int64_t ci = cix + SDX * (ciy + SDY * ciz);
+
+                    // cell widths on this level
+                    const double wx = WIDTHS_X[level];
+                    const double wy = WIDTHS_Y[level];
+                    const double wz = WIDTHS_Z[level];
+
+                    // number of cells on this level
+                    const int64_t ncx = NCELLS_X[level];
+                    const int64_t ncy = NCELLS_Y[level];
+                    const int64_t ncz = NCELLS_Z[level];
+
+
 
                     int64_t ocx = cfx + IL[ci * IL_STRIDE_OUTER + ox * 3 + 0];
                     int64_t ocy = cfy + IL[ci * IL_STRIDE_OUTER + ox * 3 + 1];
