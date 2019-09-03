@@ -686,7 +686,7 @@ class MCFMM_LM(MCCommon):
 
 
             // compute the local expansions
-            #pragma omp parallel for collapse(2)
+            //#pragma omp parallel for collapse(2)
             for( int level=1 ; level<R ; level++) {{
                  // loop over IL for this child cell
                 for( int ox=0 ; ox<IL_NO ; ox++){{

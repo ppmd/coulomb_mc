@@ -659,13 +659,13 @@ class MCCommon:
 
         for cx in call_elements:
             call += '''
-            #pragma omp master
-            {{
-            #pragma omp task
-            {{
+            //#pragma omp master
+            //{{
+            //#pragma omp task
+            //{{
                 {CX}
-            }}
-            }}
+            //}}
+            //}}
 
             '''.format(CX=cx)
 
@@ -682,10 +682,10 @@ class MCCommon:
             {PARAMETERS}
         ){{
             
-            #pragma omp parallel
-            {{
+            //#pragma omp parallel
+            //{{
                 {CALL}
-            }}
+            //}}
 
             return 0;
         }}
@@ -740,7 +740,7 @@ class MCCommon:
         oi = old_energy_indirect.value
         sl = si_lr_energy.value
 
-        self._update_profiling(old_time_direct, old_time_indirect, new_time_direct, new_time_indirect)
+        self._update_profiling(old_time_direct.value, old_time_indirect.value, new_time_direct.value, new_time_indirect.value)
 
         return (nd + ni) - (od + oi) - sl
 

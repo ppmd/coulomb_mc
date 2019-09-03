@@ -326,7 +326,7 @@ class DirectCommon(MCCommon):
                 const INT64 idi = IDS[ix];
                 
                 //for each offset
-                #pragma omp parallel for reduction(+:UTMP)
+                //#pragma omp parallel for reduction(+:UTMP)
                 for(INT64 ox=0 ; ox<noffsets ; ox++){{
                     
                     INT64 ocx = CIX + NNMAP[ox * 3 + 0];
