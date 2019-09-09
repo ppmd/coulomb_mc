@@ -306,10 +306,10 @@ class MCFMM_LM(MCCommon):
 
         elif bc in (BCType.PBC, BCType.NEAREST):
             bc_block = r'''
-                ocx = (ocx + ncx) % ncx;
-                ocy = (ocy + ncy) % ncy;
-                ocz = (ocz + ncz) % ncz;
-            '''
+                ocx = (ocx + ({O})*ncx) % ncx;
+                ocy = (ocy + ({O})*ncy) % ncy;
+                ocz = (ocz + ({O})*ncz) % ncz;
+            '''.format(O=self.solver.max_il_offset)
         else:
             raise RuntimeError('Unknown or not implemented boundary condition.')
         

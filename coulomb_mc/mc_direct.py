@@ -247,9 +247,9 @@ class DirectCommon(MCCommon):
                 pbcz = (ocz < 0) ? -1.0 * EZ : ( (ocz >= LCX) ? EZ : 0.0 ); 
 
 
-                ocx = (ocx + LCX) % LCX;
-                ocy = (ocy + LCY) % LCY;
-                ocz = (ocz + LCZ) % LCZ;
+                ocx = (ocx + 128*LCX) % LCX;
+                ocy = (ocy + 128*LCY) % LCY;
+                ocz = (ocz + 128*LCZ) % LCZ;
             '''
         else:
             raise RuntimeError('Unknown or not implemented boundary condition.')
