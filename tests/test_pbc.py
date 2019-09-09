@@ -210,3 +210,91 @@ def test_pbc_3(MM_LM, R):
         assert abs(MC.energy - correct) < 10**-5
 
 
+
+@pytest.mark.parametrize("MM_LM", (mc_fmm_lm.MCFMM_LM, mc_fmm_mm.MCFMM_MM))
+@pytest.mark.parametrize("R", (3,4,5))
+def test_pbc_non_cubic_1(MM_LM, R):
+
+    N = 100
+    e = (30, 40, 50)
+    L = 16
+
+
+    rng = np.random.RandomState(34118)
+
+    A = state.State()
+    A.domain = domain.BaseDomainHalo(extent=e)
+    A.domain.boundary_condition = domain.BoundaryTypePeriodic()
+
+
+    A.P = data.PositionDat()
+    A.Q = data.ParticleDat(ncomp=1)
+    A.G = data.ParticleDat(ncomp=1, dtype=INT64)
+
+    pi = np.zeros((N, 3), REAL)
+    for dx in (0,1,2):
+        pi[:, dx] = rng.uniform(low=-0.5*e[dx], high=0.5*e[dx], size=N)
+    qi = np.array(rng.uniform(low=-1, high=1, size=(N, 1)), REAL)
+    bias = np.sum(qi) / N
+    qi -= bias
+
+    gi = np.arange(N).reshape((N, 1))
+
+    with A.modify() as m:
+        m.add({
+            A.P: pi,
+            A.Q: qi,
+            A.G: gi
+        })
+
+
+    MC = MM_LM(A.P, A.Q, A.domain, 'pbc', R, L)
+    
+    MC.initialise()
+
+
+    DFS = kmc_direct.PBCDirect(e, A.domain, L)
+
+    correct = DFS(N, A.P.view, A.Q.view)
+
+    err = abs(MC.energy - correct) / abs(correct)
+    assert err < 10.**-5
+
+
+    for testx in range(100):
+
+
+        gid = rng.randint(0, N)
+        lid = np.where(A.G.view[:, 0] == gid)[0]
+
+        pos = np.zeros(3)
+        for dx in (0,1,2,):
+            pos[dx] = rng.uniform(-0.5*e[dx], 0.5*e[dx])
+
+        ed = MC.propose((lid, pos.copy()))
+        MC.propose((lid, pos.copy()))
+        e0 = ed + MC.energy
+
+        old_pos = pi[gid, :].copy()
+
+
+        #print("\t==>", get_old_energy(N, lid, pi, qi), get_new_energy(N, lid, pi, qi, pos), get_self_energy(qi[gid, 0], old_pos, pos))
+
+
+        pi[gid, :] = pos.copy()
+        correct = DFS(N, pi, qi)
+
+        
+        err = abs(correct - e0) / abs(correct)
+        #print(err, correct, e0)
+
+        assert err < 10.**-5
+        
+
+        # accept the move
+        MC.accept((lid, pos.copy()), ed)
+
+
+        assert abs(MC.energy - correct) < 10**-5
+
+
