@@ -126,11 +126,11 @@ def test_pbc_2(MM_LM):
 
 
 @pytest.mark.parametrize("MM_LM", (mc_fmm_lm.MCFMM_LM, mc_fmm_mm.MCFMM_MM))
-def test_pbc_3(MM_LM):
+@pytest.mark.parametrize("R", (3,4,5))
+def test_pbc_3(MM_LM, R):
 
     N = 100
     e = 10.
-    R = max(4, int(math.log(4*N, 8)))
     L = 16
 
 

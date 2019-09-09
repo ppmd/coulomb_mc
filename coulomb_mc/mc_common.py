@@ -1,5 +1,5 @@
 
-
+import time
 import numpy as np
 from ppmd import opt, lib
 from enum import Enum
@@ -699,6 +699,8 @@ class MCCommon:
 
     def _single_propose(self, px, pos):
         
+        t0 = time.time()
+
         args = []
         tmps = []
         
@@ -732,6 +734,7 @@ class MCCommon:
         args += argt
         tmps += tmpt
 
+        t1 = time.time()
         self._single_propose_lib(*args)
         
         nd = new_energy_direct.value
@@ -739,8 +742,8 @@ class MCCommon:
         od = old_energy_direct.value
         oi = old_energy_indirect.value
         sl = si_lr_energy.value
-
-        self._update_profiling(old_time_direct.value, old_time_indirect.value, new_time_direct.value, new_time_indirect.value)
+        
+        self._update_profiling(old_time_direct.value, old_time_indirect.value, new_time_direct.value, new_time_indirect.value, t1 - t0)
 
         return (nd + ni) - (od + oi) - sl
 
