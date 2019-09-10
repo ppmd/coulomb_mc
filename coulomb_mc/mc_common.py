@@ -29,6 +29,30 @@ class BCType(Enum):
 
 
 class MCCommon:
+    
+    def _init_common(self):
+        self._new_cell = np.zeros(3, INT64)
+        self._mm_cells = np.zeros((self.R, 3), INT64)
+        self._mm_child_index = np.zeros((self.R, 3), INT64)
+
+        self._ptr_new_cell = self._new_cell.ctypes.get_as_parameter()
+        self._ptr_mm_cells = self._mm_cells.ctypes.get_as_parameter()
+        self._ptr_mm_child_index = self._mm_child_index.ctypes.get_as_parameter()
+
+        self._old_position = np.zeros(3, REAL)
+        self._new_position = np.zeros(3, REAL)
+
+        self._ptr_old_position = self._old_position.ctypes.get_as_parameter()
+        self._ptr_new_position = self._new_position.ctypes.get_as_parameter()
+
+
+        if self.boundary_condition == BCType.PBC:
+            self._ptr_mvector = self.mvector.ctypes.get_as_parameter()
+            self._ptr_evector = self.evector.ctypes.get_as_parameter()
+            self._ptr_lrc_linop_data = self.solver.lrc.linop_data.ctypes.get_as_parameter()
+            self._ptr_lrc_linop_indptr = self.solver.lrc.linop_indptr.ctypes.get_as_parameter()
+            self._ptr_lrc_linop_indices = self.solver.lrc.linop_indices.ctypes.get_as_parameter()
+
 
     def _profile_inc(self, key, inc):
         key = self.__class__.__name__ + ':' + key
@@ -70,11 +94,11 @@ class MCCommon:
                 new_position.ctypes.get_as_parameter(),
                 REAL(charge),
                 REAL(self.lr_energy),
-                self.mvector.ctypes.get_as_parameter(),
-                self.evector.ctypes.get_as_parameter(),
-                self.solver.lrc.linop_data.ctypes.get_as_parameter(),
-                self.solver.lrc.linop_indptr.ctypes.get_as_parameter(),
-                self.solver.lrc.linop_indices.ctypes.get_as_parameter(),
+                self._ptr_mvector,
+                self._ptr_evector,
+                self._ptr_lrc_linop_data,
+                self._ptr_lrc_linop_indptr,
+                self._ptr_lrc_linop_indices,
                 ctypes.byref(return_energy)
             )
             
@@ -107,11 +131,11 @@ class MCCommon:
                 new_position.ctypes.get_as_parameter(),
                 REAL(charge),
                 REAL(0.0),
-                self.mvector.ctypes.get_as_parameter(),
-                self.evector.ctypes.get_as_parameter(),
-                self.solver.lrc.linop_data.ctypes.get_as_parameter(),
-                self.solver.lrc.linop_indptr.ctypes.get_as_parameter(),
-                self.solver.lrc.linop_indices.ctypes.get_as_parameter(),
+                self._ptr_mvector,
+                self._ptr_evector,
+                self._ptr_lrc_linop_data,
+                self._ptr_lrc_linop_indptr,
+                self._ptr_lrc_linop_indices,
                 ctypes.byref(return_energy)
             )
             
@@ -563,34 +587,29 @@ class MCCommon:
             self.lib_sl_call = ''
 
 
-    def get_lib_sl_combined_args(self, px, pos, energy):
+    def get_lib_sl_combined_args(self, charge, ptr_old_position, ptr_new_position, energy):
         
 
         if not (self.boundary_condition == BCType.PBC):
             return [], [None,]
 
-        charge = self.charges[px, 0]
-        old_pos = self.positions[px, :]
-
-        old_position = np.array((old_pos[0], old_pos[1], old_pos[2]), REAL)
-        new_position = np.array((pos[0], pos[1], pos[2]), REAL)
 
         args = [
             INT64(0),
-            old_position.ctypes.get_as_parameter(),
-            new_position.ctypes.get_as_parameter(),
+            ptr_old_position,
+            ptr_new_position,
             REAL(charge),
             REAL(self.lr_energy),
-            self.mvector.ctypes.get_as_parameter(),
-            self.evector.ctypes.get_as_parameter(),
-            self.solver.lrc.linop_data.ctypes.get_as_parameter(),
-            self.solver.lrc.linop_indptr.ctypes.get_as_parameter(),
-            self.solver.lrc.linop_indices.ctypes.get_as_parameter(),
+            self._ptr_mvector,
+            self._ptr_evector,
+            self._ptr_lrc_linop_data,
+            self._ptr_lrc_linop_indptr,
+            self._ptr_lrc_linop_indices,
             ctypes.byref(energy)
         ]
         
 
-        return args, (old_position, new_position)
+        return args, (None,)
 
     
     def _init_single_propose_lib(self):
@@ -668,6 +687,12 @@ class MCCommon:
 
 
     def _single_propose(self, px, pos):
+
+        
+        charge = self.charges.view[px, 0]
+
+        self._old_position[:] = self.positions[px,:]
+        self._new_position[:] = (pos[0], pos[1], pos[2])
         
         t0 = time.time()
 
@@ -682,7 +707,7 @@ class MCCommon:
         new_time_direct = REAL(0)
 
         argt, tmpt = self.direct.get_lib_combined_args(
-            px, pos, old_energy_direct, new_energy_direct, old_time_direct, new_time_direct)
+            px, pos, self._ptr_new_position, old_energy_direct, new_energy_direct, old_time_direct, new_time_direct)
         args += argt
         tmps += tmpt
 
@@ -694,15 +719,17 @@ class MCCommon:
         new_time_indirect = REAL(0)
 
         argt, tmpt = self.get_lib_combined_args(
-            px, pos, old_energy_indirect, new_energy_indirect, old_time_indirect, new_time_indirect)
+            px, pos, self._ptr_new_position, old_energy_indirect, new_energy_indirect, old_time_indirect, new_time_indirect)
         args += argt
         tmps += tmpt
 
+
         # SI LR lib
         si_lr_energy = REAL(0)
-        argt, tmpt = self.get_lib_sl_combined_args(px, pos, si_lr_energy)
+        argt, tmpt = self.get_lib_sl_combined_args(charge, self._ptr_old_position, self._ptr_new_position, si_lr_energy)
         args += argt
         tmps += tmpt
+
 
         t1 = time.time()
         self._single_propose_lib(*args)
@@ -741,7 +768,39 @@ class MCCommon:
 
 
 
+    def _get_new_cells(self, position):
 
+        e = self.domain.extent
+
+        sr0 = position[0] + 0.5 * e[0]
+        sr1 = position[1] + 0.5 * e[1]
+        sr2 = position[2] + 0.5 * e[2]
+        cell_widths = [1.0 / (ex / (sx**(self.R - 1))) for ex, sx in zip(e, self.solver.subdivision)]
+        c0 = int(sr0 * cell_widths[0])
+        c1 = int(sr1 * cell_widths[1])
+        c2 = int(sr2 * cell_widths[2])
+        sd0 = self.solver.subdivision[0]
+        sd1 = self.solver.subdivision[1]
+        sd2 = self.solver.subdivision[2]
+        sl0 = sd0 ** (self.R-1)
+        sl1 = sd1 ** (self.R-1)
+        sl2 = sd2 ** (self.R-1)
+        c0 = 0 if c0 < 0 else ((sl0-1) if c0 >= sl0 else c0)
+        c1 = 0 if c1 < 0 else ((sl1-1) if c1 >= sl1 else c1)
+        c2 = 0 if c2 < 0 else ((sl2-1) if c2 >= sl2 else c2)
+
+        for rx in range(self.R-1, -1, -1):
+            self._mm_cells[rx, :] = (c0, c1, c2)
+            self._mm_child_index[rx, :] = (
+                c0 % sd0,
+                c1 % sd1,
+                c2 % sd2
+            )
+            c0 //= sd0
+            c1 //= sd1
+            c2 //= sd2
+
+        self._new_cell[:] = self._mm_cells[self.R-1, :].copy()
 
 
 

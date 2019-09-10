@@ -47,20 +47,27 @@ class MCFMM_LM(MCCommon):
 
         pd = type(self.charges)
         self.group._mc_lm_ids = pd(ncomp=1, dtype=INT64)
-        self.direct = DirectCommon(positions, charges, domain, boundary_condition,
-            r, self.lm.subdivision, self.group._lm_fine_cells, self.group._mc_lm_ids)
-        
+
+
         self.sh = pairloop.state_handler.StateHandler(state=None, shell_cutoff=self.lm.max_cell_width, pair=False)
+
+        self.direct = DirectCommon(positions, charges, domain, boundary_condition,
+            r, self.lm.subdivision, self.group._lm_fine_cells, self.group._mc_lm_ids, self.sh)
+        
 
         self._init_libs()
 
         self.tree = None
+        self._ptr_tree = None
         
         if self.boundary_condition == BCType.PBC:
             self.lrc = self.lm.lrc
             self._init_lr_correction_libs()
 
         self._init_single_propose_lib()
+        self.mvector = np.zeros(self.ncomp , REAL)
+        self.evector = np.zeros(self.ncomp , REAL)
+        self._init_common()
 
 
     def initialise(self):
@@ -77,10 +84,11 @@ class MCFMM_LM(MCCommon):
         self.direct.initialise()
         self._profile_inc('initialise_direct_initialise', time.time() - t0)
         self.tree = self.lm.tree[:].copy()
+        self._ptr_tree = self.tree.ctypes.get_as_parameter()
         
         if self.boundary_condition == BCType.PBC:
-            self.mvector = self.solver.mvector.copy()
-            self.evector = self.solver.evector.copy()
+            self.mvector[:] = self.solver.mvector.copy()
+            self.evector[:] = self.solver.evector.copy()
             self.lr_energy = self.solver.lr_energy
 
     def _inc_prop_count(self):
@@ -103,7 +111,8 @@ class MCFMM_LM(MCCommon):
         px = int(move[0])
         new_pos = move[1]
 
-        new_cell, mm_cells, mm_child_index = self._get_new_cells(new_pos)
+        self._get_new_cells(new_pos)
+        new_cell, mm_cells, mm_child_index = self._new_cell, self._mm_cells, self._mm_child_index
 
         g = self.positions.group
 
@@ -140,7 +149,7 @@ class MCFMM_LM(MCCommon):
             self.sh.get_pointer(self.positions(access.READ)),
             self.sh.get_pointer(self.charges(access.READ)),
             self.sh.get_pointer(self.group._lm_cells(access.READ)),
-            self.tree.ctypes.get_as_parameter(),
+            self._ptr_tree,
             self.lm.il_scalararray.ctypes_data,
             new_pos.ctypes.get_as_parameter(),
             mm_cells.ctypes.get_as_parameter(),
@@ -181,46 +190,6 @@ class MCFMM_LM(MCCommon):
         pass
 
 
-    def _get_new_cells(self, position):
-
-        mm_cells = np.zeros((self.R, 3), INT64)
-        mm_child_index = np.zeros((self.R, 3), INT64)
-
-        e = self.domain.extent
-
-        sr0 = position[0] + 0.5 * e[0]
-        sr1 = position[1] + 0.5 * e[1]
-        sr2 = position[2] + 0.5 * e[2]
-        cell_widths = [1.0 / (ex / (sx**(self.R - 1))) for ex, sx in zip(e, self.lm.subdivision)]
-        c0 = int(sr0 * cell_widths[0])
-        c1 = int(sr1 * cell_widths[1])
-        c2 = int(sr2 * cell_widths[2])
-        sd0 = self.lm.subdivision[0]
-        sd1 = self.lm.subdivision[1]
-        sd2 = self.lm.subdivision[2]
-        sl0 = sd0 ** (self.R-1)
-        sl1 = sd1 ** (self.R-1)
-        sl2 = sd2 ** (self.R-1)
-        c0 = 0 if c0 < 0 else ((sl0-1) if c0 >= sl0 else c0)
-        c1 = 0 if c1 < 0 else ((sl1-1) if c1 >= sl1 else c1)
-        c2 = 0 if c2 < 0 else ((sl2-1) if c2 >= sl2 else c2)
-
-        for rx in range(self.R-1, -1, -1):
-            mm_cells[rx, :] = (c0, c1, c2)
-            mm_child_index[rx, :] = (
-                c0 % sd0,
-                c1 % sd1,
-                c2 % sd2
-            )
-            c0 //= sd0
-            c1 //= sd1
-            c2 //= sd2
-
-        new_cell = mm_cells[self.R-1, :].copy()
-
-        return new_cell, mm_cells, mm_child_index
-
-
 
 
     def _get_new_energy(self, ix, position, charge):
@@ -231,7 +200,8 @@ class MCFMM_LM(MCCommon):
         position = np.array((position[0], position[1], position[2]), REAL)
         charge = REAL(charge)
         
-        new_cell, mm_cells, mm_child_index = self._get_new_cells(position)
+        self._get_new_cells(position)
+
         
         time_taken = REAL(0)
         
@@ -240,9 +210,9 @@ class MCFMM_LM(MCCommon):
             INT64(0),
             position.ctypes.get_as_parameter(),
             ctypes.byref(charge),
-            mm_cells.ctypes.get_as_parameter(),
-            mm_child_index.ctypes.get_as_parameter(),
-            self.tree.ctypes.get_as_parameter(),
+            self._ptr_mm_cells,
+            self._ptr_mm_child_index,
+            self._ptr_tree,
             ctypes.byref(ie),
             ctypes.byref(time_taken)
         )    
@@ -271,7 +241,7 @@ class MCFMM_LM(MCCommon):
             self.sh.get_pointer(self.charges(access.READ)),
             self.sh.get_pointer(self.group._lm_cells(access.READ)),
             self.sh.get_pointer(self.group._lm_child_index(access.READ)),
-            self.tree.ctypes.get_as_parameter(),
+            self._ptr_tree,
             ctypes.byref(ie),
             ctypes.byref(time_taken)
         )
@@ -833,7 +803,7 @@ class MCFMM_LM(MCCommon):
 
 
 
-    def get_lib_combined_args(self, ix, position, old_energy, new_energy, old_time_taken, new_time_taken):
+    def get_lib_combined_args(self, ix, position, ptr_new_position, old_energy, new_energy, old_time_taken, new_time_taken):
 
 
         ie = REAL(0)
@@ -841,11 +811,10 @@ class MCFMM_LM(MCCommon):
         position = np.array((position[0], position[1], position[2]), REAL)
         charge = REAL(self.charges[ix,0])
         
-        new_cell, mm_cells, mm_child_index = self._get_new_cells(position)
-        
+        self._get_new_cells(position)
 
         args = [
-            self.tree.ctypes.get_as_parameter(),
+            self._ptr_tree,
             INT64(ix),
             self.sh.get_pointer(self.positions(access.READ)),
             self.sh.get_pointer(self.charges(access.READ)),
@@ -854,15 +823,15 @@ class MCFMM_LM(MCCommon):
             ctypes.byref(old_energy),
             ctypes.byref(old_time_taken),
             INT64(0),
-            position.ctypes.get_as_parameter(),
+            ptr_new_position,
             ctypes.byref(charge),
-            mm_cells.ctypes.get_as_parameter(),
-            mm_child_index.ctypes.get_as_parameter(),
+            self._ptr_mm_cells,
+            self._ptr_mm_child_index,
             ctypes.byref(new_energy),
             ctypes.byref(new_time_taken)
         ]
 
         assert len(args) == len(self.lib_parameters)
-        return args, (new_cell, mm_cells, mm_child_index)
+        return args, (None,)
 
 

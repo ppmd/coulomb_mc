@@ -25,7 +25,7 @@ PROFILE = opt.PROFILE
 
 class DirectCommon(MCCommon):
 
-    def __init__(self, positions, charges, domain, boundary_condition, r, subdivision, dat_cells, dat_gids):
+    def __init__(self, positions, charges, domain, boundary_condition, r, subdivision, dat_cells, dat_gids, state_handler):
 
         self.positions = positions
         self.charges = charges
@@ -39,6 +39,8 @@ class DirectCommon(MCCommon):
         self.dat_cells = dat_cells
         self.dat_gids = dat_gids
 
+        self.sh = state_handler
+
         assert dat_gids.ncomp == 1
         assert dat_gids.dtype == INT64
 
@@ -49,17 +51,23 @@ class DirectCommon(MCCommon):
         # interaction lists
         self.il = fmm_interaction_lists.compute_interaction_lists(domain.extent, self.subdivision)
         self.il_earray = np.array(self.il[1], INT64)
+        self._ptr_il_earray = self.il_earray.ctypes.get_as_parameter()
 
 
         s = self.subdivision
         s = [sx ** (self.R - 1) for sx in s]
         self.cell_occupation = np.zeros((s[2], s[1], s[0]), INT64)
+        self._ptr_cell_occupation = self.cell_occupation.ctypes.get_as_parameter()
         self.cell_indices = np.zeros((s[2], s[1], s[0], 10), INT64)
+        self._ptr_cell_indices = self.cell_indices.ctypes.get_as_parameter()
         self.max_occupancy = None
 
         self.direct_map = {}
         self._direct_contrib_lib = None
         self._init_direct_contrib_lib()
+
+        self._tcell = np.zeros(3, INT64)
+        self._ptr_tcell = self._tcell.ctypes.get_as_parameter()
 
 
     def initialise(self):
@@ -106,13 +114,13 @@ class DirectCommon(MCCommon):
             INT64(self.il_earray.shape[0]),
             INT64(self.cell_indices.shape[3]),
             ctypes.byref(index_c),
-            self.dat_gids.view.ctypes.get_as_parameter(),
-            self.positions.view.ctypes.get_as_parameter(),
-            self.charges.view.ctypes.get_as_parameter(),
-            self.dat_cells.view.ctypes.get_as_parameter(),
-            self.cell_occupation.ctypes.get_as_parameter(),
-            self.cell_indices.ctypes.get_as_parameter(),
-            self.il_earray.ctypes.get_as_parameter(),
+            self.sh.get_pointer(self.dat_gids(access.READ)),
+            self.sh.get_pointer(self.positions(access.READ)),
+            self.sh.get_pointer(self.charges(access.READ)),
+            self.sh.get_pointer(self.dat_cells(access.READ)),
+            self._ptr_cell_occupation,
+            self._ptr_cell_indices,
+            self._ptr_il_earray,
             ctypes.byref(REAL()),
             ctypes.byref(INT64()),
             ctypes.byref(energy_pc),
@@ -138,7 +146,7 @@ class DirectCommon(MCCommon):
         energy_pc = REAL(0)
         index_c = INT64(px)
         tpos = np.array((pos[0], pos[1], pos[2]), REAL)
-        tcell = np.array(cell, INT64)
+        self._tcell[:] = cell
 
         time_direct = REAL(0)
         self._direct_contrib_lib(
@@ -147,15 +155,15 @@ class DirectCommon(MCCommon):
             INT64(self.il_earray.shape[0]),
             INT64(self.cell_indices.shape[3]),
             ctypes.byref(index_c),
-            self.dat_gids.view.ctypes.get_as_parameter(),
-            self.positions.view.ctypes.get_as_parameter(),
-            self.charges.view.ctypes.get_as_parameter(),
-            self.dat_cells.view.ctypes.get_as_parameter(),
-            self.cell_occupation.ctypes.get_as_parameter(),
-            self.cell_indices.ctypes.get_as_parameter(),
-            self.il_earray.ctypes.get_as_parameter(),
+            self.sh.get_pointer(self.dat_gids(access.READ)),
+            self.sh.get_pointer(self.positions(access.READ)),
+            self.sh.get_pointer(self.charges(access.READ)),
+            self.sh.get_pointer(self.dat_cells(access.READ)),
+            self._ptr_cell_occupation,
+            self._ptr_cell_indices,
+            self._ptr_il_earray,
             tpos.ctypes.get_as_parameter(),
-            tcell.ctypes.get_as_parameter(),
+            self._ptr_tcell,
             ctypes.byref(energy_pc),
             ctypes.byref(time_direct)
         )
@@ -216,6 +224,7 @@ class DirectCommon(MCCommon):
         s = [sx ** (self.R - 1) for sx in s]
         if self.cell_indices.shape[3] < self.max_occupancy:
             self.cell_indices = np.zeros((s[2], s[1], s[0], self.max_occupancy), INT64)
+            self._ptr_cell_indices = self.cell_indices.ctypes.get_as_parameter()
         
         for cellx in self.direct_map.keys():
             l = len(self.direct_map[cellx])
@@ -530,28 +539,27 @@ class DirectCommon(MCCommon):
         '''
 
 
-    def get_lib_combined_args(self, px, pos, old_energy, new_energy, old_time_taken, new_time_taken):
+    def get_lib_combined_args(self, px, pos, ptr_new_position, old_energy, new_energy, old_time_taken, new_time_taken):
 
         cell = self._get_cell(pos)
 
         index_c = INT64(px)
-        tpos = np.array((pos[0], pos[1], pos[2]), REAL)
-        tcell = np.array(cell, INT64)
+        self._tcell[:] = cell
         
         args = [
             INT64(1),
             INT64(self.il_earray.shape[0]),
             INT64(self.cell_indices.shape[3]),
             ctypes.byref(index_c),
-            self.dat_gids.view.ctypes.get_as_parameter(),
-            self.positions.view.ctypes.get_as_parameter(),
-            self.charges.view.ctypes.get_as_parameter(),
-            self.dat_cells.view.ctypes.get_as_parameter(),
-            self.cell_occupation.ctypes.get_as_parameter(),
-            self.cell_indices.ctypes.get_as_parameter(),
-            self.il_earray.ctypes.get_as_parameter(),
-            tpos.ctypes.get_as_parameter(),
-            tcell.ctypes.get_as_parameter(),
+            self.sh.get_pointer(self.dat_gids(access.READ)),
+            self.sh.get_pointer(self.positions(access.READ)),
+            self.sh.get_pointer(self.charges(access.READ)),
+            self.sh.get_pointer(self.dat_cells(access.READ)),
+            self._ptr_cell_occupation,
+            self._ptr_cell_indices,
+            self._ptr_il_earray,
+            ptr_new_position,
+            self._ptr_tcell,
             ctypes.byref(old_energy),
             ctypes.byref(new_energy),
             ctypes.byref(old_time_taken),
