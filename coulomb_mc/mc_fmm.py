@@ -1,7 +1,7 @@
 
 
 import numpy as np
-from ppmd import data, loop, kernel, access, lib, opt
+from ppmd import data, loop, kernel, access, lib, opt, pairloop
 from ppmd.coulomb import fmm_interaction_lists, octal
 from coulomb_kmc import kmc_expansion_tools, common
 import ctypes
@@ -110,9 +110,11 @@ class MCFMM(MCCommon):
         for datx in g.particle_dats:
             tmp += getattr(g, datx)._dat.nbytes
         self.dat_size = tmp
+        
 
-
-        self.direct = DirectCommon(positions, charges, domain, boundary_condition, r, self.subdivision, g._mc_fmm_cells, g._mc_ids)
+        width = self.domain.extent[0] / (2**(self.R-1))
+        self.sh = pairloop.state_handler.StateHandler(state=None, shell_cutoff=width, pair=False)
+        self.direct = DirectCommon(positions, charges, domain, boundary_condition, r, self.subdivision, g._mc_fmm_cells, g._mc_ids, self.sh)
 
         self.energy = None
 
