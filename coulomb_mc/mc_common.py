@@ -87,6 +87,7 @@ class MCCommon:
             new_position = np.array((pos[0], pos[1], pos[2]), REAL)
 
             return_energy = REAL(0)
+            time_taken = REAL(0)
 
             self._lr_si_lib(
                 INT64(0),
@@ -99,7 +100,8 @@ class MCCommon:
                 self._ptr_lrc_linop_data,
                 self._ptr_lrc_linop_indptr,
                 self._ptr_lrc_linop_indices,
-                ctypes.byref(return_energy)
+                ctypes.byref(return_energy),
+                ctypes.byref(time_taken)
             )
             
 
@@ -125,6 +127,8 @@ class MCCommon:
 
             return_energy = REAL(0)
 
+            time_taken = REAL(0)
+
             self._lr_si_lib(
                 INT64(1),
                 old_position.ctypes.get_as_parameter(),
@@ -136,7 +140,8 @@ class MCCommon:
                 self._ptr_lrc_linop_data,
                 self._ptr_lrc_linop_indptr,
                 self._ptr_lrc_linop_indices,
-                ctypes.byref(return_energy)
+                ctypes.byref(return_energy),
+                ctypes.byref(time_taken)
             )
             
             self.lr_energy = -1.0 * return_energy.value
@@ -447,8 +452,11 @@ class MCCommon:
             const REAL  * RESTRICT  linop_data,
             const INT64 * RESTRICT  linop_indptr,
             const INT64 * RESTRICT  linop_indices,
-                  REAL  * RESTRICT  return_energy
+                  REAL  * RESTRICT  return_energy,
+                  REAL  * RESTRICT TIME_TAKEN
         ){{
+
+            std::chrono::high_resolution_clock::time_point _loop_timer_t0 = std::chrono::high_resolution_clock::now();
 
             REAL tmpu0 = lr_energy_diff(accept_flag, old_position, new_position, charge, old_energy, 
                 existing_multipole, existing_evector, linop_data, linop_indptr, linop_indices);
@@ -457,6 +465,10 @@ class MCCommon:
 
             
             *return_energy = -1.0 * tmpu0 + tmpu1;
+
+            std::chrono::high_resolution_clock::time_point _loop_timer_t1 = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double> _loop_timer_res = _loop_timer_t1 - _loop_timer_t0;
+            *TIME_TAKEN = (double) _loop_timer_res.count();
 
             return 0;
         }}  
@@ -474,7 +486,8 @@ class MCCommon:
             const REAL  * RESTRICT  linop_data,
             const INT64 * RESTRICT  linop_indptr,
             const INT64 * RESTRICT  linop_indices,
-                  REAL  * RESTRICT  return_energy
+                  REAL  * RESTRICT  return_energy,
+                  REAL  * RESTRICT TIME_TAKEN
         ) {{
 
             return LR_SI::lr_self_interaction_inner(
@@ -488,7 +501,8 @@ class MCCommon:
                 linop_data,
                 linop_indptr,
                 linop_indices,
-                return_energy
+                return_energy,
+                TIME_TAKEN
             );
 
         }}
@@ -507,6 +521,7 @@ class MCCommon:
                 Include('omp.h'),
                 Include('stdio.h'),
                 Include('math.h'),
+                Include('chrono'),
                 Define('INT64', 'int64_t'),
                 Define('REAL', 'double'),
                 Define('NCOMP', str(self.ncomp)),
@@ -564,6 +579,7 @@ class MCCommon:
             'const INT64 * RESTRICT  LR_SI_linop_indptr',
             'const INT64 * RESTRICT  LR_SI_linop_indices',
             '      REAL  * RESTRICT  LR_SI_return_energy',
+            '      REAL  * RESTRICT  TIME_TAKEN',
         ]
 
         self.lib_sl_call = '''
@@ -578,7 +594,8 @@ class MCCommon:
             LR_SI_linop_data,
             LR_SI_linop_indptr,
             LR_SI_linop_indices,
-            LR_SI_return_energy
+            LR_SI_return_energy,
+            TIME_TAKEN
         );
         '''
 
@@ -587,7 +604,7 @@ class MCCommon:
             self.lib_sl_call = ''
 
 
-    def get_lib_sl_combined_args(self, charge, ptr_old_position, ptr_new_position, energy):
+    def get_lib_sl_combined_args(self, charge, ptr_old_position, ptr_new_position, energy, time_taken):
         
 
         if not (self.boundary_condition == BCType.PBC):
@@ -605,7 +622,8 @@ class MCCommon:
             self._ptr_lrc_linop_data,
             self._ptr_lrc_linop_indptr,
             self._ptr_lrc_linop_indices,
-            ctypes.byref(energy)
+            ctypes.byref(energy),
+            ctypes.byref(time_taken)
         ]
         
 
@@ -688,13 +706,13 @@ class MCCommon:
 
     def _single_propose(self, px, pos):
 
+        t0 = time.time()
         
         charge = self.charges.view[px, 0]
 
         self._old_position[:] = self.positions[px,:]
         self._new_position[:] = (pos[0], pos[1], pos[2])
         
-        t0 = time.time()
 
         args = []
         tmps = []
@@ -726,7 +744,10 @@ class MCCommon:
 
         # SI LR lib
         si_lr_energy = REAL(0)
-        argt, tmpt = self.get_lib_sl_combined_args(charge, self._ptr_old_position, self._ptr_new_position, si_lr_energy)
+        
+        si_lr_time = REAL(0)
+
+        argt, tmpt = self.get_lib_sl_combined_args(charge, self._ptr_old_position, self._ptr_new_position, si_lr_energy, si_lr_time)
         args += argt
         tmps += tmpt
 
@@ -740,7 +761,11 @@ class MCCommon:
         oi = old_energy_indirect.value
         sl = si_lr_energy.value
         
-        self._update_profiling(old_time_direct.value, old_time_indirect.value, new_time_direct.value, new_time_indirect.value, t1 - t0)
+        t2 = time.time()
+
+        self._update_propose_profiling(old_time_direct.value, old_time_indirect.value, new_time_direct.value,
+            new_time_indirect.value, si_lr_time.value, t1 - t0, t2 - t0)
+
 
         return (nd + ni) - (od + oi) - sl
 

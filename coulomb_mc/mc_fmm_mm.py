@@ -97,12 +97,17 @@ class MCFMM_MM(MCCommon):
     def _inc_prop_count(self):
         self._profile_inc('num_propose', 1)   
 
-    def _update_profiling(self, old_time_direct, old_time_indirect, new_time_direct, new_time_indirect, prop_interaction_time):
+    def _update_propose_profiling(self, old_time_direct, old_time_indirect, new_time_direct, new_time_indirect, si_lr_time, prop_overhead, prop_total):
+
         self._profile_inc('direct_new_inner', new_time_direct)
         self._profile_inc('direct_old_inner', old_time_direct)
         self._profile_inc('indirect_new_inner', new_time_indirect)
         self._profile_inc('indirect_old_inner', old_time_indirect)
-        self._profile_inc('single_propose_overhead', old_time_indirect)
+        self._profile_inc('propose_si_lr_time', si_lr_time)
+        self._profile_inc('single_propose_overhead', prop_overhead)
+        self._profile_inc('single_propose_total', prop_total)
+
+
 
     def accept(self, move, energy_diff=None):
         
@@ -130,6 +135,7 @@ class MCFMM_MM(MCCommon):
         self.direct.accept(move)
         self._profile_inc('direct_accept', time.time() - t0)       
 
+        t0 = time.time()
         new_pos = np.array(
             (new_pos[0], new_pos[1], new_pos[2]), 
             REAL
@@ -140,7 +146,6 @@ class MCFMM_MM(MCCommon):
             INT64
         )
 
-        t0 = time.time()
         
         time_taken = REAL(0)
 
@@ -701,7 +706,7 @@ class MCFMM_MM(MCCommon):
             const double rz = P[2];
 
 
-            for( int level=R-1 ; level>=0 ; level-- ){{
+            for( int level=R-1 ; level>0 ; level-- ){{
 
                 const INT64 cellx = MM_CELLS[level*3 + 0];
                 const INT64 celly = MM_CELLS[level*3 + 1];
