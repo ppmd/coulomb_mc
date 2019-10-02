@@ -185,7 +185,7 @@ class DirectCommon(MCCommon):
         g = self.positions.group
         old_cell = self.dat_cells[px, :].copy()
         new_cell = self._get_cell(new_pos)
-        
+
         # correct the cell to particle maps
         self.direct_map[(old_cell[0], old_cell[1], old_cell[2])].remove(px)
         assert px not in self.direct_map[(old_cell[0], old_cell[1], old_cell[2])]
