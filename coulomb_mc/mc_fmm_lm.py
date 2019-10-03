@@ -119,7 +119,6 @@ class MCFMM_LM(MCCommon):
 
         if energy_diff is None:
             energy_diff = self.propose(move)
-        
         self.energy += energy_diff
 
         t0 = time.time()

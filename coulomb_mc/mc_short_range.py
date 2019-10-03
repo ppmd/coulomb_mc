@@ -78,6 +78,8 @@ class NonBondedDiff:
 
 
     def accept(self, move, energy_diff=None):
+        t0 = time.time()
+
         px = int(move[0])
         new_pos = move[1]
         
@@ -121,6 +123,7 @@ class NonBondedDiff:
         self.cell_occupation[tnew[2], tnew[1], tnew[0]] = possible_new_max
         self.cell_occupation[told[2], told[1], told[0]] = ol
 
+        self._profile_inc('accept', time.time() - t0)
 
     
     def _cell_bin(self):
@@ -134,6 +137,7 @@ class NonBondedDiff:
 
 
     def initialise(self):
+        t0 = time.time()
         g = self.group
         N = g.npart_local
 
@@ -161,6 +165,7 @@ class NonBondedDiff:
         self._energy_pairloop.execute()
         self.energy = self._ga_energy[0]
 
+        self._profile_inc('initialise', time.time() - t0)
 
     def _make_occupancy_map(self):
         s = self.s
@@ -180,12 +185,11 @@ class NonBondedDiff:
 
 
     def propose(self, move):
+        t0 = time.time()
         px, pos = move
-        
 
         self._eval_pos[:] = (pos[0], pos[1], pos[2])
         self._eval_cell[:] = self._new_cell_bin(pos)
-
         
         uold = REAL(0.0)
         unew = REAL(0.0)
@@ -218,6 +222,7 @@ class NonBondedDiff:
             ctypes.byref(unew)
         )       
 
+        self._profile_inc('propose', time.time() - t0)
 
         #print(unew.value, uold.value)
         return unew.value - uold.value
@@ -368,6 +373,12 @@ class NonBondedDiff:
         return gen_loop
 
 
+    def _profile_inc(self, key, inc):
+        key = self.__class__.__name__ + ':' + key
+        if key not in PROFILE.keys():
+            PROFILE[key] = inc
+        else:
+            PROFILE[key] += inc
 
 
 
