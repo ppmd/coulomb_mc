@@ -77,14 +77,6 @@ def _setup(cutoff):
         const double r2 = R0*R0 + R1*R1 + R2*R2;
         const double dt0dt1 = dt0*dt1;
 
-
-        //if (r2 < {rc2}) {{
-        //    printf("-----> %d %d %f %f %f\n", (int) dt0, (int) dt1, rjx, rjy, rjz);
-        //}} else {{
-        //    printf("       %d %d %f %f %f\n", (int) dt0, (int) dt1, rjx, rjy, rjz);
-        //}}
-
-
         return (r2 < {rc2}) ? dt0dt1 * r2 : 0.0;
     }}
     '''.format(**constants)
@@ -214,4 +206,79 @@ def test_non_bonded_1():
 
 
 
+def test_non_bonded_2():
+
+    N = 100
+    E = (50., 40., 30)
+
+    cutoff = 5.0
+
+
+    rng = np.random.RandomState(3218)
+
+    A = state.State()
+    A.domain = domain.BaseDomainHalo(extent=E)
+    A.domain.boundary_condition = domain.BoundaryTypePeriodic()
+
+
+    A.P = data.PositionDat()
+    A.T = data.ParticleDat(ncomp=1, dtype=INT64)
+    A.E = data.GlobalArray(ncomp=1, dtype=REAL)
+
+    pi = np.zeros((N, 3), REAL)
+    for dx in (0,1,2):
+        pi[:, dx] = rng.uniform(low=-0.5*E[dx], high=0.5*E[dx], size=(N,))
+    ti = np.arange(N).reshape(N,1)
+
+
+    with A.modify() as m:
+        m.add({
+            A.P: pi,
+            A.T: ti,
+        })
+
+    header_src, ikernel = _setup(cutoff)
+
+    nbd = NonBondedDiff(A, A.T, 'pbc', cutoff, header_src)
+    nbd.initialise()
+
+
+
+    ckernel = kernel.Kernel(
+        'mc_two_species_exp', 
+        r'''
+        const double u0 = POINT_EVAL(
+            P.i[0],
+            P.i[1],
+            P.i[2],
+            P.j[0],
+            P.j[1],
+            P.j[2],
+            (double) T.i[0],
+            (double) T.j[0]
+        );
+        ENERGY[0] += u0;
+        ''', 
+        headers=(
+            lib.build.write_header(header_src),
+        )
+    )
+    
+
+    energy_pairloop = pairloop.PairLoopNeighbourListNSOMP(
+        ckernel,
+        {
+            'P': A.P(access.READ),
+            'T': A.T(access.READ),
+            'ENERGY': A.E(access.INC_ZERO)
+        },
+        cutoff
+    )
+
+
+    energy_pairloop.execute()
+
+
+    err = abs(A.E[0] - nbd.energy) / abs(A.E[0])
+    assert err < 10.**-14
 

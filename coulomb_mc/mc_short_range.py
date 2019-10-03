@@ -20,6 +20,7 @@ INT64 = ctypes.c_int64
 
 PROFILE = opt.PROFILE
 
+PairLoop = pairloop.CellByCellOMP
 
 
 class NonBondedDiff:
@@ -56,19 +57,34 @@ class NonBondedDiff:
         self._ptr_cell_indices = self.cell_indices.ctypes.get_as_parameter()
         self.max_occupancy = None
 
+        self._eval_pos = np.zeros(3, REAL)
+        self._eval_cell = np.zeros(3, INT64)
+
+        self._ptr_eval_pos = self._eval_pos.ctypes.get_as_parameter()
+        self._ptr_eval_cell = self._eval_cell.ctypes.get_as_parameter()
+
         self.direct_map = {}
         
-        self.offset_map = np.zeros((27, 3), INT64)
+        self._offset_map = np.zeros((27, 3), INT64)
         o = (-1, 0, 1)
-        self.offset_map[:] = tuple(product(o,o,o))
+        self._offset_map[:] = tuple(product(o,o,o))
+        self._ptr_offset_map = self._offset_map.ctypes.get_as_parameter()
 
+        self._ga_energy = data.GlobalArray(ncomp=1, dtype=REAL)
+        self.energy = None
 
+        self._energy_pairloop = self._generate_pairloop()
         self.lib = self._generate_lib()
 
-    def accept(self, move):
+
+    def accept(self, move, energy_diff=None):
         px = int(move[0])
         new_pos = move[1]
         
+        if energy_diff is None:
+            energy_diff = self.propose(move)
+        self.energy += energy_diff
+
         g = self.group
         old_cell = self.cells[px, :].copy()
         new_cell = self._new_cell_bin(new_pos)
@@ -142,6 +158,9 @@ class NonBondedDiff:
 
         self._make_occupancy_map()
 
+        self._energy_pairloop.execute()
+        self.energy = self._ga_energy[0]
+
 
     def _make_occupancy_map(self):
         s = self.s
@@ -162,20 +181,23 @@ class NonBondedDiff:
 
     def propose(self, move):
         px, pos = move
-        eval_pos = np.array((pos[0], pos[1], pos[2]), REAL)
-        eval_cell = np.array(self._new_cell_bin(pos), INT64)
+        
+
+        self._eval_pos[:] = (pos[0], pos[1], pos[2])
+        self._eval_cell[:] = self._new_cell_bin(pos)
+
         
         uold = REAL(0.0)
         unew = REAL(0.0)
         self.lib(
             INT64(0),
             INT64(px),
-            eval_pos.ctypes.get_as_parameter(),
-            eval_cell.ctypes.get_as_parameter(),
-            self.offset_map.ctypes.get_as_parameter(),
+            self._ptr_eval_pos,
+            self._ptr_eval_cell,
+            self._ptr_offset_map,
             INT64(self.cell_indices.shape[3]),
-            self.cell_occupation.ctypes.get_as_parameter(),
-            self.cell_indices.ctypes.get_as_parameter(),
+            self._ptr_cell_occupation,
+            self._ptr_cell_indices,
             self.sh.get_pointer(self.positions(access.READ)),
             self.sh.get_pointer(self.cells(access.READ)),
             self.sh.get_pointer(self.types(access.READ)),
@@ -184,12 +206,12 @@ class NonBondedDiff:
         self.lib(
             INT64(1),
             INT64(px),
-            eval_pos.ctypes.get_as_parameter(),
-            eval_cell.ctypes.get_as_parameter(),
-            self.offset_map.ctypes.get_as_parameter(),
+            self._ptr_eval_pos,
+            self._ptr_eval_cell,
+            self._ptr_offset_map,
             INT64(self.cell_indices.shape[3]),
-            self.cell_occupation.ctypes.get_as_parameter(),
-            self.cell_indices.ctypes.get_as_parameter(),
+            self._ptr_cell_occupation,
+            self._ptr_cell_indices,
             self.sh.get_pointer(self.positions(access.READ)),
             self.sh.get_pointer(self.cells(access.READ)),
             self.sh.get_pointer(self.types(access.READ)),
@@ -311,10 +333,39 @@ class NonBondedDiff:
         return gen_lib
 
 
+    def _generate_pairloop(self):
 
+        
+        header = lib.build.write_header(self.interaction_func)
+        kernel_code = r'''
 
+        const double u0 = POINT_EVAL(
+            P.i[0],
+            P.i[1],
+            P.i[2],
+            P.j[0],
+            P.j[1],
+            P.j[2],
+            (double) T.i[0],
+            (double) T.j[0]
+        );
 
+        ENERGY[0] += u0;
+        '''
 
+        ikernel = kernel.Kernel('mc_short_range', kernel_code, headers=(header,))
+        
+        gen_loop = PairLoop(
+            ikernel,
+            dat_dict={
+                'P': self.positions(access.READ),
+                'T': self.types(access.READ),
+                'ENERGY': self._ga_energy(access.INC_ZERO)
+            },
+            shell_cutoff=self.cutoff
+        )
+        
+        return gen_loop
 
 
 

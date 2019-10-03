@@ -16,6 +16,7 @@ import ppmd.lib as lib
 
 from coulomb_mc.mc_fmm_lm import MCFMM_LM
 from coulomb_mc.mc_fmm_mm import MCFMM_MM
+from coulomb_mc.mc_short_range import NonBondedDiff
 
 PairLoop = pairloop.CellByCellOMP
 ParticleLoop = loop.ParticleLoopOMP
@@ -27,33 +28,6 @@ Kernel = kernel.Kernel
 GlobalArray = data.GlobalArray
 Constant = kernel.Constant
 
-
-
-class ShortRangeMC:
-    def __init__(self, positions, types, dl_parser, max_hop_distance):
-        
-        self.propose_pos = ScalarArray(ncomp=3, dtype=c_double)
-        self.propose_diff = GlobalArray(ncomp=1, dtype=c_double)
-
-        cutoff = dl_parser.cutoff + max_hop_distance + 0.05
-
-        self.propose_loop = PairLoop(
-            dl_parser.ljkernel,
-            dat_dict={
-                'P': positions(access.READ),
-                'T': types(access.READ),
-                'PROP_POS': self.propose_pos(access.READ),
-                'PROP_DIFF': self.propose_diff(access.INC_ZERO)
-            },
-            shell_cutoff = cutoff
-        )
-
-    
-    def propose(self, move):
-        px, pos = move
-        self.propose_pos[:] = pos
-        self.propose_loop.execute(local_id=int(px))
-        return self.propose_diff[0]
 
 
 
@@ -132,6 +106,7 @@ class ParseDL_MONTE:
         # 2 species kernel that should vectorise assuming types in {0, 1}
 
         header_src = r'''
+        #include <math.h>
         static inline double POINT_EVAL(
             const double rix,
             const double riy,
@@ -180,6 +155,8 @@ class ParseDL_MONTE:
             return (r2 < {rc2}) ? 2. * e * ((r_m6-1.0)*r_m6 + ljs) : 0.0;           
         }}
         '''.format(**constants)
+
+        self.interaction_func = header_src
 
         header = lib.build.write_header(header_src)
 
@@ -294,7 +271,8 @@ if __name__ == '__main__':
 
     
     MC.initialise()
-    MC_LOCAL = ShortRangeMC(A.pos, A.types, dl_parser, max_hop_distance)
+    MC_LOCAL = NonBondedDiff(A, A.types, 'pbc', dl_parser.cutoff, dl_parser.interaction_func)
+    MC_LOCAL.initialise()
 
     accept_count = 0
     step_count = 0
@@ -322,21 +300,22 @@ if __name__ == '__main__':
         move = (particle_id, prop_pos)
 
         du_local = MC_LOCAL.propose(move)
-        du = 0
-        du = MC.propose(move)
-
-        # print(stepx, particle_id, prop_pos, du_local, du)
+        du_elec = MC.propose(move)
+        
+        du = du_local + du_elec
 
         if du < 0:
-            MC.accept(move, du)
+            MC_LOCAL.accept(move, du_local)
+            MC.accept(move, du_elec)
             accept_count += 1
         elif math.exp(-du * ikbT) > rng.uniform():
-            MC.accept(move, du)
+            MC_LOCAL.accept(move, du_local)
+            MC.accept(move, du_elec)
             accept_count += 1
         
         step_count += 1
         if accept_count > 0 and stepx % 1000 == 0:
-            print((time.time() - t0) / accept_count, accept_count / step_count)
+            print((time.time() - t0) / accept_count, accept_count / step_count, MC.energy + MC_LOCAL.energy)
             t0 = time.time()
             accept_count = 0
             step_count = 0
