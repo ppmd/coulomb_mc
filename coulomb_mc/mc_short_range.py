@@ -83,6 +83,11 @@ class NonBondedDiff:
         px = int(move[0])
         new_pos = move[1]
         
+        for dx in (0, 1, 2):
+            assert new_pos[dx] >= -0.5 * self.domain.extent[dx]
+            assert new_pos[dx] <=  0.5 * self.domain.extent[dx]
+
+        
         if energy_diff is None:
             energy_diff = self.propose(move)
         self.energy += energy_diff
@@ -97,7 +102,9 @@ class NonBondedDiff:
         # correct the cell to particle maps
         self.direct_map[(old_cell[0], old_cell[1], old_cell[2])].remove(px)
         assert px not in self.direct_map[(old_cell[0], old_cell[1], old_cell[2])]
+        
 
+        # tnew/told are xyz
         tnew = (new_cell[0], new_cell[1], new_cell[2])
         told = (old_cell[0], old_cell[1], old_cell[2])
 
@@ -287,7 +294,7 @@ class NonBondedDiff:
 
 
                     const bool mask = (jx == particle_id) ? 0 : 1;
-                    energy += (mask) ? POINT_EVAL(
+                    const REAL contrib = (mask) ? POINT_EVAL(
                         rix,
                         riy,
                         riz,
@@ -298,6 +305,7 @@ class NonBondedDiff:
                         (double) dat_type[jx]
                     ) : 0.0;
 
+                    energy += contrib;
             
                 }}
 
@@ -310,6 +318,7 @@ class NonBondedDiff:
         """
 
         header = r"""
+        #include <stdio.h>
         #define REAL double
         #define INT64 int64_t
         #define SX {SX}
