@@ -212,11 +212,11 @@ class ParseDL_MONTE:
             s += dt0dt1 * {s_coeff};
 
             // potential shift
-            //double ljs = 0.0;
-            double ljs = {ljs00};
-            ljs += dt0 * {ljs01mljs00};
-            ljs += dt1 * {ljs01mljs00};
-            ljs += dt0dt1 * {ljs_coeff};
+            double ljs = 0.0;
+            //double ljs = {ljs00};
+            //ljs += dt0 * {ljs01mljs00};
+            //ljs += dt1 * {ljs01mljs00};
+            //ljs += dt0dt1 * {ljs_coeff};
 
             // avoid the divide
             double eos = {eos00};
@@ -272,7 +272,7 @@ class ParseDL_MONTE:
 
 
 
-def main(L=12):
+def main(L=10):
     seed = np.random.randint(2**32 - 1)
     rng = np.random.RandomState(seed)
     method = sys.argv[1]
@@ -309,11 +309,15 @@ def main(L=12):
 
     assert np.sum(initial_charges) < 10.**-8
 
+    
 
-    max_hop_distance = 1.0
-    current_hop_distance = 0.8
-
-    desired_accept_ratio = 0.37
+    current_hop_distance = 0.25
+    
+    AUTO_SCALE = False
+    
+    if AUTO_SCALE:
+        max_hop_distance = 0.25
+        desired_accept_ratio = 0.37
 
     
 
@@ -322,10 +326,8 @@ def main(L=12):
     temperature = 273.0
     ikbT = (-1.0) / ((spc.Boltzmann / spc.elementary_charge) * temperature)
 
-
-
-
-    R = int(max(3, math.log(N, 8)))
+    alpha = 0.41
+    R = int(max(3, math.log(alpha * N, 8)))
 
 
     print("-" * 80)
@@ -422,16 +424,13 @@ def main(L=12):
     local_step_count = 0
     
     ALWAYS_ACCEPT = False
-    EXTRA_CHECKS = True
+    EXTRA_CHECKS = False
     
     t0 = time.time()
     t0_outer = time.time()
     for stepx in range(steps):
         
-        direction = rng.uniform(low=-1.0, high=1.0, size=3)
-        magnitude = np.linalg.norm(direction)
-        new_magnitude = rng.uniform(0, current_hop_distance)
-        direction = direction * (new_magnitude /  magnitude)
+        direction = rng.uniform(low=-1.0*current_hop_distance, high=current_hop_distance, size=3)
 
         particle_id = rng.randint(N)
 
@@ -492,13 +491,12 @@ def main(L=12):
 
         local_accept_ratio = local_accept_count / local_step_count
         if accept_count > 0 and stepx % 100 == 0:
-            if local_accept_ratio > 0:
+            if local_accept_ratio > 0 and AUTO_SCALE:
                 r = desired_accept_ratio / local_accept_ratio 
                 h2 = current_hop_distance / r
 
                 current_hop_distance += 0.25 * (h2 - current_hop_distance)
                 current_hop_distance = min(current_hop_distance, max_hop_distance)
-
 
                 local_step_count = 0
                 local_accept_count = 0
