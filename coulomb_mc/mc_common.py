@@ -401,7 +401,7 @@ class MCCommon:
                 mvector,
                 evector
             );
-            
+
             // add the dipole correction
             new_energy += 0.5 * apply_dipole_correction_split(
                 mvector,
@@ -462,7 +462,6 @@ class MCCommon:
                 existing_multipole, existing_evector, linop_data, linop_indptr, linop_indices);
             
             REAL tmpu1 = (accept_flag < 1) ? self_contributon(old_position, new_position, charge) : 0.0 ;
-
             
             *return_energy = -1.0 * tmpu0 + tmpu1;
 
@@ -785,6 +784,7 @@ class MCCommon:
         else:
             old_energy = self._get_old_energy(px)
             new_energy = self._get_new_energy(px, pos, self.charges[px, 0])
+
             self_energy = self._get_self_interaction(px, pos)
             combined = new_energy - old_energy - self_energy
 

@@ -325,10 +325,17 @@ def main(L=10):
     internal_to_ev = ppmd.coulomb.fmm.internal_to_ev()
     temperature = 273.0
     ikbT = (-1.0) / ((spc.Boltzmann / spc.elementary_charge) * temperature)
+    
 
-    alpha = 0.41
+    if method == 'lm':
+        alpha = 0.327
+    elif method == 'mm':
+        alpha = 0.138
+    else:
+        raise RuntimeError('Bad method chosen.')
+
+
     R = int(max(3, math.log(alpha * N, 8)))
-
 
     print("-" * 80)
     print("cutoff:", dl_parser.cutoff)
@@ -428,6 +435,10 @@ def main(L=10):
     
     t0 = time.time()
     t0_outer = time.time()
+    
+    sr_time_propose = 0.0
+    sr_time_accept = 0.0
+
     for stepx in range(steps):
         
         direction = rng.uniform(low=-1.0*current_hop_distance, high=current_hop_distance, size=3)
@@ -446,8 +457,11 @@ def main(L=10):
 
         
         move = (particle_id, prop_pos)
-
+        
+        sr_t0 = time.time()
         du_local = MC_LOCAL.propose(move)
+        sr_time_propose += time.time() - sr_t0
+
         du_elec = MC.propose(move)
         
         du = du_local + du_elec * internal_to_ev
@@ -456,14 +470,21 @@ def main(L=10):
 
         
         if du < 0 or ALWAYS_ACCEPT:
+
+            sr_t0 = time.time()
             MC_LOCAL.accept(move, du_local)
+            sr_time_accept += time.time() - sr_t0
+
             MC.accept(move, du_elec)
             accept_count += 1
             local_accept_count += 1
             MOVE_ACCEPTED = True
 
         elif math.exp(du * ikbT) > rng.uniform():
+            sr_t0 = time.time()
             MC_LOCAL.accept(move, du_local)
+            sr_time_accept += time.time() - sr_t0
+
             MC.accept(move, du_elec)
             accept_count += 1
             local_accept_count += 1
@@ -528,6 +549,8 @@ def main(L=10):
             'Nsteps' : steps,
             'time_taken': t1_outer - t0_outer,
             'accept_count': accept_count,
+            'sr_time_propose': sr_time_propose,
+            'sr_time_accept': sr_time_accept,
         }))
 
     opt.print_profile()
