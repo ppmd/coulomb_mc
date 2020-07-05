@@ -1,0 +1,3 @@
+all:
+	SPHINX_APIDOC_OPTIONS=members,undoc-members
+	sphinx-apidoc --implicit-namespaces -M -f -e -o ./source/modules ../coulomb_mc

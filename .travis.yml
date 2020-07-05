@@ -1,0 +1,36 @@
+dist:  bionic
+language: python
+python:
+    - "3.7"
+
+branches:
+    only:
+        - master
+
+
+before_install:
+    - sudo apt update
+    - sudo apt install -y libopenmpi-dev openmpi-bin mpi-default-bin
+    - pip install git+https://github.com/ppmd/ppmd@master
+    - pip install git+https://github.com/ppmd/coulomb_kmc@master
+
+install:
+    - pip install git+https://github.com/ppmd/coulomb_mc@master
+
+script:
+    - cd docs
+    - make -f Makefile_sphinxapi
+    - make html
+    - touch build/html/.nojekyll
+    - ls -l build/html/.nojekyll
+
+deploy:
+    provider: pages
+    repo: ppmd/coulomb_kmc
+    target-branch: gh-pages
+    local-dir: docs/build/html
+    github_token: $GITHUB_TOKEN
+    skip-cleanup: true
+    on:
+      branch: master
+      python: 3.7
