@@ -2,12 +2,12 @@
 
 Introduction
 ------------
-Git repository for a FMM-MC implementation based on the algorithm in *A new algorithm for electrostatic interactions in Monte Carlo simulations of charged particles*.
+Git repository for a FMM-MC implementation based on the algorithm in *A new algorithm for electrostatic interactions in Monte Carlo simulations of charged particles*, arXiv: https://arxiv.org/pdf/2006.16622.pdf, Journal: https://doi.org/10.1016/j.jcp.2020.110099.
 
-Documentation
--------------
+Documentation and Examples
+--------------------------
 
-Documentation is available at https://ppmd.github.io/coulomb_mc/.
+Documentation and examples are available at https://ppmd.github.io/coulomb_mc/.
 
 
 Installation
