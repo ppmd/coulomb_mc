@@ -1,0 +1,16 @@
+GCMC simulation of CO2 in zeolite
+temperature       273.0
+acceptmolmoveupdate  200        # Period (in moves) at which the maximum move size is recalculated
+acceptmolrotupdate  200         # Period (in moves) at which the maximum rotation angle is updated
+steps             5000        # Number of moves to perform in simulation
+equilibration     50000        # Equilibration time before statistics are gathered (in moves)
+print               1000        # Information is output every 'print' moves     
+revconformat dlpoly             # REVCON file is in DL_POLY CONFIG format
+archiveformat dlpoly4
+stack              10000        # Size of blocks (in moves) for block averaging
+maxmolrot           0.005       # Initial maximum rotation angle (degrees) 
+yamldata 1000
+move atom 2 100                 # Perform insertion/removal moves for co2 60% of the time, with a min. distance of 0.5 from atoms for inserts 
+Na core
+Cl core
+start

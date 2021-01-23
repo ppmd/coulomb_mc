@@ -1,0 +1,16 @@
+Force fields and bond constraints for for CO2 in a zeolite (use EPM2 for VDW)
+CUTOFF 2.0
+UNITS EV
+NCONFIGS 1
+ATOMS 2
+Na core 23.0 1.0
+Cl core 35.0 -1.0
+MOLTYPES 1
+salt
+MAXATOM 1000 
+FINISH
+VDW       3
+Na core       Na core       lj    1.00000000 3
+Cl core       Na core       lj    1.00000000 3
+Cl core       Cl core       lj    1.00000000 3
+CLOSE
