@@ -17,5 +17,6 @@ These two dependencies can be installed with:
 
 
 After the dependencies are installed, install coulomb_mc with:
+::
 
-``pip install --upgrade --no-cache-dir git+https://github.com/ppmd/coulomb_mc@master``
+    pip install --upgrade --no-cache-dir git+https://github.com/ppmd/coulomb_mc@master
