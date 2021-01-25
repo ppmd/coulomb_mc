@@ -5,13 +5,6 @@ FMM-MC, the algorithm this package implements, is a method to compute difference
 
 This implementation provides methods to 1) initialise a FMM-MC electrostatic solver, 2) compute the difference in electrostatic energy between the original position and the proposed positions and 3) accept a charge move to the proposed position. For details of the underlying algorithm we refer the reader to the paper *A new algorithm for electrostatic interactions in Monte Carlo simulations of charged particles*. We now provide details of how to structure a program that uses PPMD to store particle data and use this package for electrostatic interactions.
 
-
-Initialisation and Particle Data
---------------------------------
-
-Imports
-~~~~~~~
-
 We import helper modules ``numpy`` and ``ctypes`` before importing ``ppmd`` and the solver itself from ``coulomb_mc``,
 ::
     
@@ -73,6 +66,7 @@ Now that the simulation domain contains particles that have positions and charge
 
 The solver is initialised with the ``PositionDat`` that contains the particle positions, the ``ParticleDat`` that contains the particle charge values, the simulation domain ``S.domain``, boundary condition, number of levels in the gird hierarchy ``r`` and the number of expansion terms ``l``:
 ::
+
     solver = MCFMM_LM(
         positions=S.P, 
         charges=S.Q, 
