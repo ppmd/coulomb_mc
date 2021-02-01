@@ -1,3 +1,6 @@
+"""
+Methods common to both the local and multipole versions
+"""
 
 import time
 import numpy as np
@@ -770,6 +773,12 @@ class MCCommon:
 
 
     def propose(self, move, use_one_call=True):
+        """
+        Get the energy difference of a proposed move.
+
+        :arg move: Tuple (id, new_position) that represents the proposed move.
+        :arg use_one_call: Bool (default True) that chooses between multiple library calls or the agregated call.
+        """
 
         px = int(move[0])
         pos = move[1]

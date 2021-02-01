@@ -1,3 +1,8 @@
+"""
+This module implements helper functionality for computing the energy differences relating to non-bonded
+interactions, e.g. Lennard-Jones.
+"""
+
 
 import numpy as np
 from ppmd import data, loop, kernel, access, lib, opt, pairloop
@@ -25,6 +30,27 @@ PairLoop = pairloop.CellByCellOMP
 
 class NonBondedDiff:
     def __init__(self, state, types, boundary_condition, cutoff, interaction_func):
+        """
+        Main class for non-bonded interactions. Interactions are specificed by a C function that 
+        implements the following function. See DL_MONTE example for a Lennard-Jones example.
+        
+        double POINT_EVAL(
+            const double rix,   charge_i x component.
+            const double riy,   charge_i y component.
+            const double riz,   charge_i z component.
+            const double rjx,   charge_j x component.
+            const double rjy,   charge_j y component.
+            const double rjz,   charge_j z component.
+            const double dt0,   charge_i type (cast to double).
+            const double dt1    charge_j type (cast to double).
+        );
+
+        :arg state: PPMD State instance.
+        :arg types: ParticleDat (ncomp=1, dtype=int64_t) of particle types.
+        :arg boundary_condition: Currently only 'pbc' is implemented.
+        :arg cutoff: float, Short range cutoff.
+        :arg interaction_func: str, that implements the interaction function.
+        """
         
         self.group = state
         self.domain = state.domain
@@ -78,6 +104,13 @@ class NonBondedDiff:
 
 
     def accept(self, move, energy_diff=None):
+        """
+        Accept a proposed move. Note the move does not have to be "proposed" before it can be accepted.
+
+        :arg move: tuple (id, new_position) that identifies the move.
+        :arg energy_diff: float, new system total energy. If none (default) the energy will be computed.
+        """
+
         t0 = time.time()
 
         px = int(move[0])
@@ -144,6 +177,9 @@ class NonBondedDiff:
 
 
     def initialise(self):
+        """
+        Initialise the instance. Must be called before moves are proposed or accepted.
+        """
         t0 = time.time()
         g = self.group
         N = g.npart_local
@@ -192,6 +228,13 @@ class NonBondedDiff:
 
 
     def propose(self, move):
+        """
+        Get the energy difference of a proposed move.
+
+        :arg move: Tuple (id, new_position) that represents the proposed move.
+        :arg use_one_call: Bool (default True) that chooses between multiple library calls or the agregated call.
+        """
+        
         t0 = time.time()
         px, pos = move
 

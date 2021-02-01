@@ -1,4 +1,6 @@
-
+"""
+This module implements the functionality for the multipole expansion version of the algorithm.
+"""
 
 import numpy as np
 from ppmd import data, loop, kernel, access, lib, opt, pairloop
@@ -26,7 +28,16 @@ PROFILE = opt.PROFILE
 class MCFMM_MM(MCCommon):
 
     def __init__(self, positions, charges, domain, boundary_condition, r, l):
+        """
+        Main class to implement an electrostatic solver using multipole expansions.
 
+        :arg positions: PositionDat of charge positions.
+        :arg charges: ParticleDat(ncomp=1, dtype=double) of charge values.
+        :arg domain: Simulation domain instance.
+        :arg boundary_condition: One of ('free_space', 'pbc').
+        :arg r: int, Number of levels in heirarchical tree. Must be greater than 3.
+        :arg l: int, Number of expansion terms.
+        """
 
         assert boundary_condition in ('free_space', 'pbc')
         self.positions = positions
@@ -73,6 +84,9 @@ class MCFMM_MM(MCCommon):
 
 
     def initialise(self):
+        """
+        Initialise the solver. Must be called before proposing or accepting moves.
+        """
         N = self.positions.npart_local
         g = self.positions.group
         with g._mc_mm_ids.modify_view() as mv:
@@ -110,7 +124,12 @@ class MCFMM_MM(MCCommon):
 
 
     def accept(self, move, energy_diff=None):
-        
+        """
+        Accept a proposed move. Note the move does not have to be "proposed" before it can be accepted.
+
+        :arg move: tuple (id, new_position) that identifies the move.
+        :arg energy_diff: float, new system total electrostatic energy. If none (default) the energy will be computed.
+        """
 
         px = int(move[0])
         new_pos = move[1]

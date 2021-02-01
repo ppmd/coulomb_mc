@@ -1,4 +1,6 @@
-
+"""
+Functionality related to direct interactions between charges.
+"""
 
 import numpy as np
 from ppmd import data, loop, kernel, access, lib, opt
@@ -25,7 +27,11 @@ PROFILE = opt.PROFILE
 
 class DirectCommon(MCCommon):
 
+
     def __init__(self, positions, charges, domain, boundary_condition, r, subdivision, dat_cells, dat_gids, state_handler):
+        """
+        Handles direct interactions between charges. Not intended for use by user.
+        """
 
         self.positions = positions
         self.charges = charges

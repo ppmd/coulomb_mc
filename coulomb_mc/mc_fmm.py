@@ -1,4 +1,6 @@
-
+"""
+This module implements protype code for the implementation. For production use see the MCFMM_LM class.
+"""
 
 import numpy as np
 from ppmd import data, loop, kernel, access, lib, opt, pairloop
@@ -24,6 +26,9 @@ PROFILE = opt.PROFILE
 class MCFMM(MCCommon):
 
     def __init__(self, positions, charges, domain, boundary_condition, r, l):
+        """
+        This class implements protype code for the implementation. For production use see the MCFMM_LM class.
+        """
 
         self.positions = positions
         self.charges = charges
