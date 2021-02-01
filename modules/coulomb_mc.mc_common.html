@@ -1,0 +1,179 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>coulomb_mc.mc_common module &#8212; coulomb_mc 1 documentation</title>
+    <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="../_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="../_static/graphviz.css" />
+    <script id="documentation_options" data-url_root="../" src="../_static/documentation_options.js"></script>
+    <script src="../_static/jquery.js"></script>
+    <script src="../_static/underscore.js"></script>
+    <script src="../_static/doctools.js"></script>
+    <script async="async" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="coulomb_mc.mc_direct module" href="coulomb_mc.mc_direct.html" />
+    <link rel="prev" title="coulomb_mc package" href="coulomb_mc.html" />
+   
+  <link rel="stylesheet" href="../_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="module-coulomb_mc.mc_common">
+<span id="coulomb-mc-mc-common-module"></span><h1>coulomb_mc.mc_common module<a class="headerlink" href="#module-coulomb_mc.mc_common" title="Permalink to this headline">¶</a></h1>
+<p>Methods common to both the local and multipole versions</p>
+<dl class="py class">
+<dt id="coulomb_mc.mc_common.BCType">
+<em class="property">class </em><code class="sig-prename descclassname">coulomb_mc.mc_common.</code><code class="sig-name descname">BCType</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">value</span></em><span class="sig-paren">)</span><a class="headerlink" href="#coulomb_mc.mc_common.BCType" title="Permalink to this definition">¶</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">enum.Enum</span></code></p>
+<p>Enum to indicate boundary condition type.</p>
+<dl class="py attribute">
+<dt id="coulomb_mc.mc_common.BCType.FREE_SPACE">
+<code class="sig-name descname">FREE_SPACE</code><em class="property"> = 'free_space'</em><a class="headerlink" href="#coulomb_mc.mc_common.BCType.FREE_SPACE" title="Permalink to this definition">¶</a></dt>
+<dd><p>Free-space, e.g. vacuum, boundary conditions.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="coulomb_mc.mc_common.BCType.NEAREST">
+<code class="sig-name descname">NEAREST</code><em class="property"> = '27'</em><a class="headerlink" href="#coulomb_mc.mc_common.BCType.NEAREST" title="Permalink to this definition">¶</a></dt>
+<dd><p>Primary image and the surrounding 26 nearest neighbours.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt id="coulomb_mc.mc_common.BCType.PBC">
+<code class="sig-name descname">PBC</code><em class="property"> = 'pbc'</em><a class="headerlink" href="#coulomb_mc.mc_common.BCType.PBC" title="Permalink to this definition">¶</a></dt>
+<dd><p>Fully periodic boundary conditions</p>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt id="coulomb_mc.mc_common.MCCommon">
+<em class="property">class </em><code class="sig-prename descclassname">coulomb_mc.mc_common.</code><code class="sig-name descname">MCCommon</code><a class="headerlink" href="#coulomb_mc.mc_common.MCCommon" title="Permalink to this definition">¶</a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<dl class="py method">
+<dt id="coulomb_mc.mc_common.MCCommon.get_lib_sl_combined_args">
+<code class="sig-name descname">get_lib_sl_combined_args</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">charge</span></em>, <em class="sig-param"><span class="n">ptr_old_position</span></em>, <em class="sig-param"><span class="n">ptr_new_position</span></em>, <em class="sig-param"><span class="n">energy</span></em>, <em class="sig-param"><span class="n">time_taken</span></em><span class="sig-paren">)</span><a class="headerlink" href="#coulomb_mc.mc_common.MCCommon.get_lib_sl_combined_args" title="Permalink to this definition">¶</a></dt>
+<dd></dd></dl>
+
+<dl class="py method">
+<dt id="coulomb_mc.mc_common.MCCommon.propose">
+<code class="sig-name descname">propose</code><span class="sig-paren">(</span><em class="sig-param"><span class="n">move</span></em>, <em class="sig-param"><span class="n">use_one_call</span><span class="o">=</span><span class="default_value">True</span></em><span class="sig-paren">)</span><a class="headerlink" href="#coulomb_mc.mc_common.MCCommon.propose" title="Permalink to this definition">¶</a></dt>
+<dd><p>Get the energy difference of a proposed move.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>move</strong> – Tuple (id, new_position) that represents the proposed move.</p></li>
+<li><p><strong>use_one_call</strong> – Bool (default True) that chooses between multiple library calls or the agregated call.</p></li>
+</ul>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="../index.html">coulomb_mc</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../installation.html">Installation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../introduction.html">Introduction</a></li>
+</ul>
+<ul class="current">
+<li class="toctree-l1 current"><a class="reference internal" href="coulomb_mc.html">coulomb_mc package</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="coulomb_mc.html#submodules">Submodules</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">coulomb_mc.mc_common module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="coulomb_mc.mc_direct.html">coulomb_mc.mc_direct module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="coulomb_mc.mc_expansion_tools.html">coulomb_mc.mc_expansion_tools module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="coulomb_mc.mc_fmm.html">coulomb_mc.mc_fmm module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="coulomb_mc.mc_fmm_lm.html">coulomb_mc.mc_fmm_lm module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="coulomb_mc.mc_fmm_mm.html">coulomb_mc.mc_fmm_mm module</a></li>
+<li class="toctree-l3"><a class="reference internal" href="coulomb_mc.mc_short_range.html">coulomb_mc.mc_short_range module</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="../index.html">Documentation overview</a><ul>
+  <li><a href="coulomb_mc.html">coulomb_mc package</a><ul>
+      <li>Previous: <a href="coulomb_mc.html" title="previous chapter">coulomb_mc package</a></li>
+      <li>Next: <a href="coulomb_mc.mc_direct.html" title="next chapter">coulomb_mc.mc_direct module</a></li>
+  </ul></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="../search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2020, William Saunders.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.4.3</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="../_sources/modules/coulomb_mc.mc_common.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

@@ -1,0 +1,7 @@
+coulomb\_mc.mc\_common module
+=============================
+
+.. automodule:: coulomb_mc.mc_common
+   :members:
+   :undoc-members:
+   :show-inheritance:

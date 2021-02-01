@@ -1,0 +1,7 @@
+coulomb\_mc.mc\_fmm module
+==========================
+
+.. automodule:: coulomb_mc.mc_fmm
+   :members:
+   :undoc-members:
+   :show-inheritance:

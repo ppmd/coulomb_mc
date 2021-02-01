@@ -1,0 +1,215 @@
+
+<!DOCTYPE html>
+
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Introduction &#8212; coulomb_mc 1 documentation</title>
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <link rel="stylesheet" href="_static/alabaster.css" type="text/css" />
+    <link rel="stylesheet" type="text/css" href="_static/graphviz.css" />
+    <script id="documentation_options" data-url_root="./" src="_static/documentation_options.js"></script>
+    <script src="_static/jquery.js"></script>
+    <script src="_static/underscore.js"></script>
+    <script src="_static/doctools.js"></script>
+    <script async="async" src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/2.7.7/latest.js?config=TeX-AMS-MML_HTMLorMML"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="coulomb_mc package" href="modules/coulomb_mc.html" />
+    <link rel="prev" title="Installation" href="installation.html" />
+   
+  <link rel="stylesheet" href="_static/custom.css" type="text/css" />
+  
+  
+  <meta name="viewport" content="width=device-width, initial-scale=0.9, maximum-scale=0.9" />
+
+  </head><body>
+  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          
+
+          <div class="body" role="main">
+            
+  <div class="section" id="introduction">
+<h1>Introduction<a class="headerlink" href="#introduction" title="Permalink to this headline">¶</a></h1>
+<p>FMM-MC, the algorithm this package implements, is a method to compute differences in electrostatic potential energies in Metropolis Hastings style Monte Carlo. More specifically, there is a class of simulation techniques where the state of the simulation is a set of charged particles that interact via a Coulomb potential. To advance the simulation a charge is selected at random and a new position is randomly sampled for this charge (often by adding a random offset vector). This new position is called the proposed position. Based on the electrostatic energy difference between the original position and the proposed position the move is either accepted or rejected. We support free-space and fully periodic boundary conditions.</p>
+<p>This implementation provides methods to 1) initialise a FMM-MC electrostatic solver, 2) compute the difference in electrostatic energy between the original position and the proposed positions and 3) accept a charge move to the proposed position. For details of the underlying algorithm we refer the reader to the paper <em>A new algorithm for electrostatic interactions in Monte Carlo simulations of charged particles</em>. We now provide details of how to structure a program that uses PPMD to store particle data and use this package for electrostatic interactions.</p>
+<p>We import helper modules <code class="docutils literal notranslate"><span class="pre">numpy</span></code> and <code class="docutils literal notranslate"><span class="pre">ctypes</span></code> before importing <code class="docutils literal notranslate"><span class="pre">ppmd</span></code> and the solver itself from <code class="docutils literal notranslate"><span class="pre">coulomb_mc</span></code>,</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">numpy</span> <span class="k">as</span> <span class="nn">np</span>
+<span class="kn">from</span> <span class="nn">ctypes</span> <span class="kn">import</span> <span class="o">*</span>
+
+<span class="kn">from</span> <span class="nn">ppmd</span> <span class="kn">import</span> <span class="o">*</span>
+<span class="kn">from</span> <span class="nn">coulomb_mc.mc_fmm_lm</span> <span class="kn">import</span> <span class="n">MCFMM_LM</span>
+</pre></div>
+</div>
+<p>We then define constants that determine which types to use from PPMD,</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">State</span> <span class="o">=</span> <span class="n">state</span><span class="o">.</span><span class="n">State</span>
+<span class="n">PositionDat</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">PositionDat</span>
+<span class="n">ParticleDat</span> <span class="o">=</span> <span class="n">data</span><span class="o">.</span><span class="n">ParticleDat</span>
+</pre></div>
+</div>
+<p>After the imports we can start to define our simulation. We shall create a cubic domain of side length <code class="docutils literal notranslate"><span class="pre">E</span></code> containing <code class="docutils literal notranslate"><span class="pre">N</span></code> positively charged particles. The boundary condition of the PPMD simulation domain determines how particles should be treated at the edge of the domain and does not influence the electrostatic solver, we choose the <code class="docutils literal notranslate"><span class="pre">BoundaryTypePeriodic</span></code> boundary condition. Later, for our electrostatic solver we shall choose the <code class="docutils literal notranslate"><span class="pre">free_space</span></code> boundary condition. In the following code snippet we create a PPMD state, which groups our particle data types together, and define the simulation domain and corresponding boundary condition:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Number of charges</span>
+<span class="n">N</span> <span class="o">=</span> <span class="mi">100</span>
+<span class="c1"># Extents of domain</span>
+<span class="n">E</span> <span class="o">=</span> <span class="mf">10.</span>
+<span class="c1"># Iteration count</span>
+<span class="n">Nsteps</span> <span class="o">=</span> <span class="mi">50000</span>
+
+<span class="c1"># Create a PPMD State and domain with ParticleDats for positions, charge and global id.</span>
+<span class="n">S</span> <span class="o">=</span> <span class="n">State</span><span class="p">(</span>
+    <span class="n">domain</span><span class="o">=</span><span class="n">domain</span><span class="o">.</span><span class="n">BaseDomainHalo</span><span class="p">(</span>
+        <span class="n">extent</span><span class="o">=</span><span class="p">(</span><span class="n">E</span><span class="p">,</span><span class="n">E</span><span class="p">,</span><span class="n">E</span><span class="p">),</span>
+        <span class="n">boundary_condition</span><span class="o">=</span><span class="n">domain</span><span class="o">.</span><span class="n">BoundaryTypePeriodic</span><span class="p">()</span>
+    <span class="p">),</span>
+    <span class="n">particle_dats</span><span class="o">=</span><span class="p">{</span>
+        <span class="s1">&#39;P&#39;</span> <span class="p">:</span> <span class="n">PositionDat</span><span class="p">(),</span>
+        <span class="s1">&#39;Q&#39;</span> <span class="p">:</span> <span class="n">ParticleDat</span><span class="p">(</span><span class="n">ncomp</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">c_double</span><span class="p">),</span>
+        <span class="s1">&#39;GID&#39;</span><span class="p">:</span> <span class="n">ParticleDat</span><span class="p">(</span><span class="n">ncomp</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">c_int</span><span class="p">),</span>
+    <span class="p">}</span>
+<span class="p">)</span>
+</pre></div>
+</div>
+<p>Note that the names of the particle data structures are user choice. These properties will be accessible as attributes of the parent <code class="docutils literal notranslate"><span class="pre">State</span></code> instance. For example to access the particle global ids we would use the <code class="docutils literal notranslate"><span class="pre">S.GID</span></code> attribute.</p>
+<p>Now that the particle data types have been defined we can add particles to our simulation domain. Particles are added or removed from the domain by using the <code class="docutils literal notranslate"><span class="pre">modify</span></code> method of the <code class="docutils literal notranslate"><span class="pre">State</span></code> class in a Python context.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="c1"># Add unit charges to the domain with uniform random positions.</span>
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">RandomState</span><span class="p">(</span><span class="n">seed</span><span class="o">=</span><span class="mi">123</span><span class="p">)</span>
+
+<span class="k">with</span> <span class="n">S</span><span class="o">.</span><span class="n">modify</span><span class="p">()</span> <span class="k">as</span> <span class="n">sm</span><span class="p">:</span>
+    <span class="n">sm</span><span class="o">.</span><span class="n">add</span><span class="p">(</span>
+        <span class="p">{</span>
+            <span class="n">S</span><span class="o">.</span><span class="n">P</span><span class="p">:</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">low</span><span class="o">=-</span><span class="mf">0.5</span><span class="o">*</span><span class="n">E</span><span class="p">,</span> <span class="n">high</span><span class="o">=</span><span class="mf">0.5</span><span class="o">*</span><span class="n">E</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="n">N</span><span class="p">,</span><span class="mi">3</span><span class="p">)),</span>
+            <span class="n">S</span><span class="o">.</span><span class="n">Q</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">(</span><span class="n">shape</span><span class="o">=</span><span class="p">(</span><span class="n">N</span><span class="p">,</span><span class="mi">1</span><span class="p">)),</span>
+            <span class="n">S</span><span class="o">.</span><span class="n">GID</span><span class="p">:</span> <span class="n">np</span><span class="o">.</span><span class="n">arange</span><span class="p">(</span><span class="n">N</span><span class="p">)</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="n">N</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
+        <span class="p">}</span>
+    <span class="p">)</span>
+</pre></div>
+</div>
+<p>Now that the simulation domain contains particles that have positions and charge values we can define and initialise the electrostatic solver. Here we use the free space boundary conditions as an example. If we were to use the fully periodic boundary conditions we would have to ensure that our simulation did not contain a net charge. For an example simulation using the fully periodic boundary conditions please refer to the additional examples.</p>
+<p>The solver is initialised with the <code class="docutils literal notranslate"><span class="pre">PositionDat</span></code> that contains the particle positions, the <code class="docutils literal notranslate"><span class="pre">ParticleDat</span></code> that contains the particle charge values, the simulation domain <code class="docutils literal notranslate"><span class="pre">S.domain</span></code>, boundary condition, number of levels in the gird hierarchy <code class="docutils literal notranslate"><span class="pre">r</span></code> and the number of expansion terms <code class="docutils literal notranslate"><span class="pre">l</span></code>:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">solver</span> <span class="o">=</span> <span class="n">MCFMM_LM</span><span class="p">(</span>
+    <span class="n">positions</span><span class="o">=</span><span class="n">S</span><span class="o">.</span><span class="n">P</span><span class="p">,</span>
+    <span class="n">charges</span><span class="o">=</span><span class="n">S</span><span class="o">.</span><span class="n">Q</span><span class="p">,</span>
+    <span class="n">domain</span><span class="o">=</span><span class="n">S</span><span class="o">.</span><span class="n">domain</span><span class="p">,</span>
+    <span class="n">boundary_condition</span><span class="o">=</span><span class="s1">&#39;free_space&#39;</span><span class="p">,</span>
+    <span class="n">r</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
+    <span class="n">l</span><span class="o">=</span><span class="mi">12</span>
+<span class="p">)</span>
+<span class="c1"># Initialise the electrostatic solver.</span>
+<span class="n">solver</span><span class="o">.</span><span class="n">initialise</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>For more information and guidance on how to choose the number of levels and expansion terms please see the corresponding publication. Based on our experiment we would expect approximately 5 significant figures of accuracy from 12 expansion terms. The number of levels should be chosen as <span class="math notranslate nohighlight">\(\log_8 ( \alpha N)\)</span>. Where <span class="math notranslate nohighlight">\(\alpha\)</span> is a machine dependent coefficient (we used <span class="math notranslate nohighlight">\(\alpha \approx 0.327\)</span> on Ivy Bridge E2650v2).</p>
+<p>We are now ready to enter our main simulation loop. For this introductory example we shall propose moves with a uniform random offset. Note that proposed moves must be in the simulation domain which is why we periodically wrap the proposed position. The proposed move is described to the electrostatic solver by providing a particle id (i.e. the integer row index in the <code class="docutils literal notranslate"><span class="pre">ParticleDats</span></code>) and the proposed new position. In the introductory example we accept moves if the energy change is negative. It is important to note that when the accept method is called with a proposed move the electrostatic solver updates internal data structures <strong>and</strong> updates the particles position in the <code class="docutils literal notranslate"><span class="pre">PositionDat</span></code>. In this case the <code class="docutils literal notranslate"><span class="pre">PositionDat</span></code> is stored as the attribute <code class="docutils literal notranslate"><span class="pre">S.P</span></code> which was passed into the solver constructor.</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="k">for</span> <span class="n">ix</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">Nsteps</span><span class="p">):</span>
+
+    <span class="c1"># randomly select a particle, N.B. the propose interface takes a particle id</span>
+    <span class="c1"># and a proposed position inside the domain. The particle id is the index of</span>
+    <span class="c1"># the particle in the ParticleDat.</span>
+    <span class="n">particle_id</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">randint</span><span class="p">(</span><span class="n">N</span><span class="p">)</span>
+    <span class="n">offset</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">uniform</span><span class="p">(</span><span class="n">low</span><span class="o">=-</span><span class="mf">0.01</span><span class="o">*</span><span class="n">E</span><span class="p">,</span> <span class="n">high</span><span class="o">=</span><span class="mf">0.01</span><span class="o">*</span><span class="n">E</span><span class="p">,</span> <span class="n">size</span><span class="o">=</span><span class="p">(</span><span class="mi">3</span><span class="p">,))</span>
+
+    <span class="n">proposed_position</span> <span class="o">=</span> <span class="n">S</span><span class="o">.</span><span class="n">P</span><span class="p">[</span><span class="n">particle_id</span><span class="p">,</span> <span class="p">:]</span> <span class="o">+</span> <span class="n">offset</span>
+    <span class="c1"># map back into the simulation domain</span>
+    <span class="k">for</span> <span class="n">dx</span> <span class="ow">in</span> <span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">):</span>
+        <span class="k">if</span> <span class="n">proposed_position</span><span class="p">[</span><span class="n">dx</span><span class="p">]</span> <span class="o">&lt;</span> <span class="o">-</span><span class="mf">0.5</span><span class="o">*</span><span class="n">E</span><span class="p">:</span> <span class="n">proposed_position</span><span class="p">[</span><span class="n">dx</span><span class="p">]</span> <span class="o">+=</span> <span class="n">E</span>
+        <span class="k">if</span> <span class="n">proposed_position</span><span class="p">[</span><span class="n">dx</span><span class="p">]</span> <span class="o">&gt;</span>  <span class="mf">0.5</span><span class="o">*</span><span class="n">E</span><span class="p">:</span> <span class="n">proposed_position</span><span class="p">[</span><span class="n">dx</span><span class="p">]</span> <span class="o">-=</span> <span class="n">E</span>
+
+    <span class="c1"># the move is defined by the following tuple</span>
+    <span class="n">move</span> <span class="o">=</span> <span class="p">(</span><span class="n">particle_id</span><span class="p">,</span> <span class="n">proposed_position</span><span class="p">)</span>
+
+    <span class="c1"># get the electrostatic energy difference of the proposed move</span>
+    <span class="n">energy_change</span> <span class="o">=</span> <span class="n">solver</span><span class="o">.</span><span class="n">propose</span><span class="p">(</span><span class="n">move</span><span class="p">)</span>
+
+    <span class="c1"># crude accept/reject determination.</span>
+    <span class="c1"># The solver tracks the energy of the system (as a current implementation detail)</span>
+    <span class="c1"># If the energy change is passed as an argument the energy difference will not be</span>
+    <span class="c1"># recomputed. Future implementation versions may not need this requirement.</span>
+    <span class="k">if</span> <span class="n">energy_change</span> <span class="o">&lt;</span> <span class="mf">0.0</span><span class="p">:</span>
+        <span class="n">solver</span><span class="o">.</span><span class="n">accept</span><span class="p">(</span><span class="n">move</span><span class="p">,</span> <span class="n">energy_change</span><span class="p">)</span>
+
+    <span class="k">if</span> <span class="n">ix</span> <span class="o">%</span> <span class="mi">1000</span> <span class="o">==</span> <span class="mi">0</span><span class="p">:</span>
+        <span class="nb">print</span><span class="p">(</span><span class="n">ix</span><span class="p">,</span> <span class="n">move</span><span class="p">,</span> <span class="n">energy_change</span><span class="p">,</span> <span class="n">solver</span><span class="o">.</span><span class="n">energy</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>A full copy of this example is available <a class="reference download internal" download="" href="_downloads/8b586ea4736ac6be7d82b0942a00ee61/free_space.py"><code class="xref download docutils literal notranslate"><span class="pre">here</span></code></a>.</p>
+</div>
+
+
+          </div>
+          
+        </div>
+      </div>
+      <div class="sphinxsidebar" role="navigation" aria-label="main navigation">
+        <div class="sphinxsidebarwrapper">
+<h1 class="logo"><a href="index.html">coulomb_mc</a></h1>
+
+
+
+
+
+
+
+
+<h3>Navigation</h3>
+<p class="caption"><span class="caption-text">Contents:</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Introduction</a></li>
+</ul>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="modules/coulomb_mc.html">coulomb_mc package</a></li>
+</ul>
+
+<div class="relations">
+<h3>Related Topics</h3>
+<ul>
+  <li><a href="index.html">Documentation overview</a><ul>
+      <li>Previous: <a href="installation.html" title="previous chapter">Installation</a></li>
+      <li>Next: <a href="modules/coulomb_mc.html" title="next chapter">coulomb_mc package</a></li>
+  </ul></li>
+</ul>
+</div>
+<div id="searchbox" style="display: none" role="search">
+  <h3 id="searchlabel">Quick search</h3>
+    <div class="searchformwrapper">
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" aria-labelledby="searchlabel" />
+      <input type="submit" value="Go" />
+    </form>
+    </div>
+</div>
+<script>$('#searchbox').show(0);</script>
+
+
+
+
+
+
+
+
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="footer">
+      &copy;2020, William Saunders.
+      
+      |
+      Powered by <a href="http://sphinx-doc.org/">Sphinx 3.4.3</a>
+      &amp; <a href="https://github.com/bitprophet/alabaster">Alabaster 0.7.12</a>
+      
+      |
+      <a href="_sources/introduction.rst.txt"
+          rel="nofollow">Page source</a>
+    </div>
+
+    
+
+    
+  </body>
+</html>

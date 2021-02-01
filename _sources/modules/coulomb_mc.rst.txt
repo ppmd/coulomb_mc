@@ -1,0 +1,21 @@
+coulomb\_mc package
+===================
+
+.. automodule:: coulomb_mc
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Submodules
+----------
+
+.. toctree::
+   :maxdepth: 4
+
+   coulomb_mc.mc_common
+   coulomb_mc.mc_direct
+   coulomb_mc.mc_expansion_tools
+   coulomb_mc.mc_fmm
+   coulomb_mc.mc_fmm_lm
+   coulomb_mc.mc_fmm_mm
+   coulomb_mc.mc_short_range

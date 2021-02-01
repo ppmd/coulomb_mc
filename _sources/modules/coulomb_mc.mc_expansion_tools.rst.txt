@@ -1,0 +1,7 @@
+coulomb\_mc.mc\_expansion\_tools module
+=======================================
+
+.. automodule:: coulomb_mc.mc_expansion_tools
+   :members:
+   :undoc-members:
+   :show-inheritance:
